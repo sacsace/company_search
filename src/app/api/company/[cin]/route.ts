@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { isValidCin } from "@/lib/cin-parser";
 import { buildCompanyProfile } from "@/lib/company-service";
 
 export async function GET(
@@ -9,6 +10,10 @@ export async function GET(
 
   if (!cin) {
     return NextResponse.json({ error: "CIN이 필요합니다." }, { status: 400 });
+  }
+
+  if (!isValidCin(cin)) {
+    return NextResponse.json({ error: "유효하지 않은 CIN 형식입니다." }, { status: 400 });
   }
 
   try {

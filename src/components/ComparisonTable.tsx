@@ -1,9 +1,7 @@
 "use client";
 
-import { GitCompare, Loader2 } from "lucide-react";
 import type { ComparisonField } from "@/lib/types";
 import { formatInr } from "@/lib/cin-parser";
-import clsx from "clsx";
 
 interface ComparisonTableProps {
   fields: ComparisonField[];
@@ -20,41 +18,41 @@ export function ComparisonTable({
 }: ComparisonTableProps) {
   if (loading) {
     return (
-      <div className="flex items-center justify-center rounded-2xl border border-slate-200 bg-white py-16">
-        <Loader2 className="h-8 w-8 animate-spin text-brand-600" />
-        <span className="ml-3 text-slate-600">비교 분석 중...</span>
+      <div className="border border-neutral-200 py-16 text-center text-sm text-neutral-500">
+        비교 검색 중...
       </div>
     );
   }
 
+  if (fields.length === 0) {
+    return null;
+  }
+
   return (
-    <div className="animate-fade-in space-y-4">
-      <div className="rounded-2xl bg-gradient-to-r from-brand-600 to-india p-6 text-white">
-        <div className="flex items-center gap-2">
-          <GitCompare className="h-5 w-5" />
-          <h2 className="text-lg font-bold">기업 비교 분석</h2>
-        </div>
-        <p className="mt-2 text-sm leading-relaxed text-white/90">{summary}</p>
+    <div className="space-y-4">
+      <div className="border border-neutral-200 bg-neutral-50 px-4 py-3">
+        <h2 className="text-sm font-semibold text-neutral-900">비교 요약</h2>
+        <p className="mt-1 text-sm leading-relaxed text-neutral-600">{summary}</p>
       </div>
 
-      <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div className="overflow-x-auto border border-neutral-200">
         <table className="w-full min-w-[600px] text-sm">
           <thead>
-            <tr className="border-b border-slate-200 bg-slate-50">
-              <th className="sticky left-0 bg-slate-50 px-4 py-3 text-left font-semibold text-slate-700">
+            <tr className="border-b border-neutral-200 bg-neutral-50">
+              <th className="sticky left-0 bg-neutral-50 px-4 py-2.5 text-left text-xs font-medium text-neutral-500">
                 항목
               </th>
               {companyNames.map((name, i) => (
-                <th key={i} className="px-4 py-3 text-left font-semibold text-slate-700">
-                  <span className="line-clamp-2">{name}</span>
+                <th key={i} className="px-4 py-2.5 text-left text-xs font-medium text-neutral-900">
+                  {name}
                 </th>
               ))}
             </tr>
           </thead>
           <tbody>
             {fields.map((field) => (
-              <tr key={field.key} className="border-b border-slate-100 hover:bg-slate-50/50">
-                <td className="sticky left-0 bg-white px-4 py-3 font-medium text-slate-600">
+              <tr key={field.key} className="border-b border-neutral-100">
+                <td className="sticky left-0 bg-white px-4 py-2.5 text-xs text-neutral-500">
                   {field.label}
                 </td>
                 {field.values.map((value, i) => {
@@ -63,21 +61,9 @@ export function ComparisonTable({
                       ? formatInr(value)
                       : String(value ?? "—");
 
-                  const isHighlight =
-                    field.highlight === "max" &&
-                    typeof value === "number" &&
-                    value === Math.max(...(field.values.filter((v) => typeof v === "number") as number[])) &&
-                    value > 0;
-
                   return (
-                    <td
-                      key={i}
-                      className={clsx(
-                        "px-4 py-3 text-slate-800",
-                        isHighlight && "bg-green-50 font-semibold text-green-800"
-                      )}
-                    >
-                      <span className="line-clamp-4">{displayValue}</span>
+                    <td key={i} className="px-4 py-2.5 text-sm text-neutral-800">
+                      {displayValue}
                     </td>
                   );
                 })}

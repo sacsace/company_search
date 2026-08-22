@@ -1,32 +1,49 @@
 import { parseCin } from "./cin-parser";
-import { enrichFromWeb, extractShareholdersFromText } from "./enricher";
-import {
-  getCompanyByCin,
-  parseRawRecord,
-  searchCompaniesByName,
-  searchDirectorDataset,
-} from "./mca-data";
+import { enrichFromWeb, extractShareholdersFromText, isRegistryBoilerplate } from "./enricher";
+import { searchCompaniesByName } from "./mca-data";
+import { isReadableLatinText } from "./text-utils";
+import { fetchRegistryByCin } from "./registry-scraper";
 import { generateCompanySummary } from "./summary";
-import type { CompanyProfile, CompanySearchResult, Director } from "./types";
+import type { CompanyProfile, CompanySearchResult, Director, WebEnrichment } from "./types";
+import { searchCompaniesByWeb } from "./web-search";
 
-function mapDirectors(records: Record<string, string | number | null | undefined>[]): Director[] {
-  return records.map((r) => {
-    const cessation = String(r.DATE_OF_CESSATION ?? r.DATEOFCESSATION ?? r.CESSATION_DATE ?? "");
-    return {
-      din: String(r.DIN ?? r.DIN_PAN ?? ""),
-      name: String(r.DIRECTOR_NAME ?? r.DIRECTORNAME ?? r.NAME ?? ""),
-      designation: String(r.DESIGNATION ?? "Director"),
-      appointmentDate: String(r.DATE_OF_APPOINTMENT ?? r.DATEOFAPPOINTMENT ?? ""),
-      cessationDate: cessation || null,
-      status: cessation ? "Resigned" : "Current",
-    };
-  });
+function hasDataGovApiKey(): boolean {
+  const key = process.env.DATA_GOV_API_KEY;
+  return !!key && key !== "your_api_key_here";
+}
+
+function applyWebFields(
+  baseData: {
+    name: string;
+    status: string;
+    type: string;
+    listingStatus: string;
+    dateOfIncorporation: string;
+    industry: string;
+    email: string | null;
+    registeredOffice: { address: string; city: string; state: string; pincode: string };
+  },
+  registry: Awaited<ReturnType<typeof fetchRegistryByCin>>,
+  web: WebEnrichment
+) {
+  if (registry?.name && !baseData.name) baseData.name = registry.name;
+  if (registry?.status && baseData.status === "Unknown") baseData.status = registry.status;
+  if (registry?.type && !baseData.type) baseData.type = registry.type;
+  if (registry?.dateOfIncorporation && !baseData.dateOfIncorporation) {
+    baseData.dateOfIncorporation = registry.dateOfIncorporation;
+  }
+  if (registry?.listingStatus) baseData.listingStatus = registry.listingStatus;
+  if (web.industry && !baseData.industry) baseData.industry = web.industry;
+  if (web.email && !baseData.email) baseData.email = web.email;
+  if (web.address && !baseData.registeredOffice.address) {
+    baseData.registeredOffice.address = web.address;
+  }
 }
 
 export async function buildCompanyProfile(cin: string): Promise<CompanyProfile> {
   const normalizedCin = cin.toUpperCase().trim();
   const cinParsed = parseCin(normalizedCin);
-  const dataSources: string[] = [];
+  const dataSources: string[] = ["CIN Parser"];
 
   let baseData = {
     cin: normalizedCin,
@@ -50,51 +67,83 @@ export async function buildCompanyProfile(cin: string): Promise<CompanyProfile> 
     industry: cinParsed?.industryDescription ?? "",
   };
 
-  try {
-    const { record, source } = await getCompanyByCin(normalizedCin);
-    if (record) {
-      const parsed = parseRawRecord(record);
-      baseData = { ...baseData, ...parsed };
-      dataSources.push(source);
+  const [webLookup, registryData] = await Promise.all([
+    searchCompaniesByWeb(normalizedCin, 5),
+    fetchRegistryByCin(normalizedCin),
+  ]);
+
+  const webMatch = webLookup.results.find((r) => r.cin === normalizedCin);
+  if (webMatch?.name && !webMatch.name.startsWith("Company (")) {
+    baseData.name = webMatch.name;
+    if (webMatch.status && webMatch.status !== "Unknown") baseData.status = webMatch.status;
+    if (webMatch.type) baseData.type = webMatch.type;
+    if (webMatch.dateOfIncorporation) baseData.dateOfIncorporation = webMatch.dateOfIncorporation;
+    if (webMatch.registeredOffice) baseData.registeredOffice.address = webMatch.registeredOffice;
+    dataSources.push(webLookup.source || "Web Search");
+  }
+
+  if (registryData) {
+    if (!baseData.name) baseData.name = registryData.name;
+    if (registryData.status && baseData.status === "Unknown") baseData.status = registryData.status;
+    if (registryData.type && !baseData.type) baseData.type = registryData.type;
+    if (registryData.roc) baseData.roc = registryData.roc;
+    if (registryData.dateOfIncorporation && !baseData.dateOfIncorporation) {
+      baseData.dateOfIncorporation = registryData.dateOfIncorporation;
     }
-  } catch (err) {
-    if ((err as Error).message === "DATA_GOV_API_KEY_REQUIRED") {
-      dataSources.push("CIN Parser (API 키 미설정)");
+    if (registryData.email) baseData.email = registryData.email;
+    if (registryData.registeredAddress) baseData.registeredOffice.address = registryData.registeredAddress;
+    dataSources.push(...registryData.sources);
+  }
+
+  const searchName = baseData.name || registryData?.name || normalizedCin;
+  const webEnrichment = await enrichFromWeb(
+    searchName,
+    normalizedCin,
+    registryData?.relatedLinks ?? [],
+    registryData?.description ?? null
+  );
+
+  if (registryData?.description) {
+    if (!webEnrichment.description) webEnrichment.description = registryData.description;
+    if (!webEnrichment.businessDescription && !isRegistryBoilerplate(registryData.description) && isReadableLatinText(registryData.description)) {
+      webEnrichment.businessDescription = registryData.description;
+    }
+    if (webEnrichment.rawSnippets.length === 0) {
+      webEnrichment.rawSnippets.unshift({
+        text: registryData.description,
+        source: "웹 레지스트리 요약",
+        url: registryData.relatedLinks[0]?.url ?? "",
+      });
     }
   }
 
-  if (!baseData.name && cinParsed) {
-    dataSources.push("CIN Parser");
+  if (!webEnrichment.foundedDate) {
+    webEnrichment.foundedDate =
+      baseData.dateOfIncorporation ||
+      registryData?.dateOfIncorporation ||
+      (cinParsed ? String(cinParsed.yearOfIncorporation) : null);
   }
 
-  const directorRecords = await searchDirectorDataset(normalizedCin);
-  let directors = mapDirectors(directorRecords);
-  if (directors.length > 0) {
-    dataSources.push("data.gov.in (Directors)");
+  if (!webEnrichment.businessDescription && cinParsed?.industryDescription) {
+    webEnrichment.businessDescription = `${searchName} — ${cinParsed.industryDescription} (NIC ${cinParsed.industryCode})`;
   }
 
-  let webEnrichment = {
-    website: null as string | null,
-    revenue: null as string | null,
-    revenueYear: null as string | null,
-    description: null as string | null,
-    industry: null as string | null,
-    employees: null as string | null,
-    sources: [] as string[],
-  };
+  applyWebFields(baseData, registryData, webEnrichment);
 
-  if (baseData.name) {
-    webEnrichment = await enrichFromWeb(baseData.name, normalizedCin);
-    if (webEnrichment.sources.length > 0) {
-      dataSources.push(...webEnrichment.sources);
-    }
+  const directors: Director[] = registryData?.directors ?? [];
+  if (webEnrichment.sources.length > 0) {
+    dataSources.push(...webEnrichment.sources);
   }
+
+  const webText = [
+    webEnrichment.description,
+    webEnrichment.rawSnippets.map((s) => s.text).join(" "),
+    webEnrichment.products.join(" "),
+    webEnrichment.services.join(" "),
+  ].join(" ");
 
   const shareholders = baseData.name
-    ? extractShareholdersFromText(
-        `${webEnrichment.description ?? ""} ${baseData.name}`,
-        baseData.name
-      )
+    ? extractShareholdersFromText(`${webText} ${baseData.name}`, baseData.name)
     : [];
 
   const profile: CompanyProfile = {
@@ -115,10 +164,6 @@ export async function buildCompanyProfile(cin: string): Promise<CompanyProfile> 
     summary: "",
     dataSources: [...new Set(dataSources)],
   };
-
-  if (!profile.industry && webEnrichment.industry) {
-    profile.industry = webEnrichment.industry;
-  }
 
   profile.summary = generateCompanySummary(profile);
   return profile;
@@ -150,7 +195,7 @@ export async function searchIndianCompanies(
             listingStatus: profile.listingStatus,
           },
         ],
-        source: profile.dataSources.join(", ") || "CIN Lookup",
+        source: profile.dataSources.join(", ") || "Web Search",
       };
     } catch {
       const parsed = parseCin(trimmed.toUpperCase());
@@ -174,33 +219,45 @@ export async function searchIndianCompanies(
     }
   }
 
-  try {
-    const { results, source } = await searchCompaniesByName(trimmed, limit);
-    return { results, source };
-  } catch (err) {
-    const message = (err as Error).message;
-    if (message === "DATA_GOV_API_KEY_REQUIRED") {
-      return {
-        results: [],
-        source: "none",
-        message:
-          "data.gov.in API 키가 필요합니다. .env.local 파일에 DATA_GOV_API_KEY를 설정하세요. (https://data.gov.in 에서 무료 발급)",
-      };
+  if (hasDataGovApiKey()) {
+    try {
+      const { results, source } = await searchCompaniesByName(trimmed, limit);
+      if (results.length > 0) {
+        return { results, source };
+      }
+    } catch (err) {
+      if ((err as Error).message === "DATA_GOV_API_KEY_REQUIRED") {
+        // fall through to web search
+      } else {
+        console.error("data.gov.in search error:", err);
+      }
     }
-    if (message === "API_KEY_INVALID") {
-      return {
-        results: [],
-        source: "none",
-        message: "API 키가 유효하지 않습니다. DATA_GOV_API_KEY를 확인해주세요.",
-      };
-    }
-    if (message === "RATE_LIMITED") {
-      return {
-        results: [],
-        source: "none",
-        message: "API 요청 한도를 초과했습니다. 잠시 후 다시 시도해주세요.",
-      };
-    }
-    throw err;
   }
+
+  const { results: webResults, source: webSource } = await searchCompaniesByWeb(trimmed, limit);
+  if (webResults.length > 0) {
+    return { results: webResults, source: webSource };
+  }
+
+  return {
+    results: [],
+    source: "none",
+    message: "검색 결과가 없습니다. 회사명을 정확히 입력하거나 CIN 번호로 검색해보세요.",
+  };
+}
+
+const CIN_PATTERN = /^[A-Z]{1}[0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6}$/i;
+
+export async function resolveCompanyFromQuery(query: string): Promise<CompanyProfile | null> {
+  const trimmed = query.trim();
+  if (!trimmed) return null;
+
+  if (CIN_PATTERN.test(trimmed)) {
+    return buildCompanyProfile(trimmed.toUpperCase());
+  }
+
+  const { results } = await searchIndianCompanies(trimmed, 1);
+  if (results.length === 0) return null;
+
+  return buildCompanyProfile(results[0].cin);
 }

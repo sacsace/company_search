@@ -27,6 +27,10 @@ const config: Config = {
       fontFamily: {
         sans: ["var(--font-geist-sans)", "system-ui", "sans-serif"],
       },
+      maxWidth: {
+        page: "67.1875rem", // max-w-4xl + 20% (1075px)
+        "page-inner": "57.625rem", // max-w-3xl + 20% (922px)
+      },
     },
   },
   plugins: [],

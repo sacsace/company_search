@@ -96,7 +96,7 @@ export async function searchCompaniesByName(
       limit,
     });
     if (exactRecords.length > 0) {
-      return { results: exactRecords.map(mapRecord), source: "data.gov.in (MCA)" };
+      return { results: exactRecords.map(mapRecord), source: "data.gov.in" };
     }
   } catch (err) {
     if ((err as Error).message !== "DATA_GOV_API_KEY_REQUIRED") {
@@ -135,7 +135,7 @@ export async function searchCompaniesByName(
     if (records.length < pageSize) break;
   }
 
-  return { results, source: "data.gov.in (MCA)" };
+  return { results, source: "data.gov.in" };
 }
 
 export async function getCompanyByCin(cin: string): Promise<{ record: RawRecord | null; source: string }> {
@@ -147,7 +147,7 @@ export async function getCompanyByCin(cin: string): Promise<{ record: RawRecord 
   });
 
   if (records.length > 0) {
-    return { record: records[0], source: "data.gov.in (MCA)" };
+    return { record: records[0], source: "data.gov.in" };
   }
 
   const recordsAlt = await fetchDataGov({
@@ -157,7 +157,7 @@ export async function getCompanyByCin(cin: string): Promise<{ record: RawRecord 
 
   return {
     record: recordsAlt[0] ?? null,
-    source: "data.gov.in (MCA)",
+    source: "data.gov.in",
   };
 }
 

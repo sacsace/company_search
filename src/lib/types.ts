@@ -25,14 +25,66 @@ export interface Shareholder {
   source: string;
 }
 
+export interface WebLink {
+  label: string;
+  url: string;
+  type: "website" | "social" | "source" | "document";
+}
+
+export interface WebInsight {
+  key: string;
+  value: string;
+  source: string;
+  sourceUrl?: string;
+}
+
+export interface WebSnippet {
+  text: string;
+  source: string;
+  url: string;
+}
+
+export interface PublicComment {
+  platform: string;
+  author: string | null;
+  text: string;
+  date: string | null;
+  url: string;
+  rating: string | null;
+}
+
+export interface WebsiteReview {
+  author: string | null;
+  rating: string | null;
+  text: string;
+  source: string;
+  url: string;
+}
+
 export interface WebEnrichment {
   website: string | null;
   revenue: string | null;
   revenueYear: string | null;
   description: string | null;
+  businessDescription: string | null;
+  foundedDate: string | null;
   industry: string | null;
   employees: string | null;
+  phone: string | null;
+  email: string | null;
+  address: string | null;
+  linkedInUrl: string | null;
+  googleReviewsSummary: string | null;
+  products: string[];
+  services: string[];
+  socialLinks: WebLink[];
+  relatedLinks: WebLink[];
+  insights: WebInsight[];
   sources: string[];
+  rawSnippets: WebSnippet[];
+  crawledPages: { url: string; title: string }[];
+  snsComments: PublicComment[];
+  websiteReviews: WebsiteReview[];
 }
 
 export interface CompanyProfile {
