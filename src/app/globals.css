@@ -42,7 +42,7 @@ body {
   background: var(--background);
   min-height: 100vh;
   overflow-x: hidden;
-  font-size: 0.8125rem;
+  font-size: 0.75rem;
   font-weight: 600;
   -webkit-font-smoothing: antialiased;
 }

@@ -61,6 +61,22 @@ export interface WebsiteReview {
   url: string;
 }
 
+export interface EmployeeReview {
+  platform: string;
+  rating: number | null;
+  title: string | null;
+  jobProfile: string | null;
+  location: string | null;
+  department: string | null;
+  likes: string | null;
+  dislikes: string | null;
+  workDetails: string | null;
+  subRatings: { name: string; rating: number }[];
+  date: string | null;
+  url: string;
+  helpfulCount: number | null;
+}
+
 export interface WebEnrichment {
   website: string | null;
   revenue: string | null;
@@ -85,6 +101,13 @@ export interface WebEnrichment {
   crawledPages: { url: string; title: string }[];
   snsComments: PublicComment[];
   websiteReviews: WebsiteReview[];
+  employeeReviews: EmployeeReview[];
+  ambitionBoxUrl: string | null;
+  ambitionBoxRating: number | null;
+  ambitionBoxReviewCount: number | null;
+  googleMapsRating: number | null;
+  googleMapsReviewCount: number | null;
+  googleMapsUrl: string | null;
   discoveredDirectors: Director[];
 }
 

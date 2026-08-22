@@ -27,23 +27,39 @@ export default function Home() {
     setError(null);
     setMessage(null);
     setDetailProfile(null);
+    setResults([]);
     setActiveTab("search");
 
     try {
-      const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 90000);
+
+      const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`, {
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+
       const data = await res.json();
+
+      if (!res.ok) {
+        setError(data.message || "검색 중 오류가 발생했습니다.");
+        return;
+      }
 
       if (data.message && data.results.length === 0) {
         setMessage(data.message);
-        setResults([]);
       } else {
         setResults(data.results);
         if (data.results.length === 0) {
-          setMessage("검색 결과가 없습니다.");
+          setMessage("검색 결과가 없습니다. 회사명을 정확히 입력하거나 CIN 번호로 검색해보세요.");
         }
       }
-    } catch {
-      setError("검색 중 오류가 발생했습니다.");
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        setError("검색 시간이 초과되었습니다. 잠시 후 다시 시도해주세요.");
+      } else {
+        setError("검색 중 오류가 발생했습니다. 서버가 실행 중인지 확인해주세요.");
+      }
     } finally {
       setSearchLoading(false);
     }
@@ -103,7 +119,7 @@ export default function Home() {
         <div className="page-container flex w-full max-w-full items-center justify-between py-4">
           <div>
             <RightsBanner />
-            <h1 className="mt-1 text-base font-bold tracking-tight text-neutral-900">
+            <h1 className="mt-1 text-sm font-bold tracking-tight text-neutral-900">
               India Company Search
             </h1>
             <p className="mt-0.5 text-xs font-semibold text-neutral-500">인도 기업 웹 검색 · 비교</p>
@@ -138,24 +154,38 @@ export default function Home() {
           </div>
         </div>
 
+        {searchLoading && (
+          <p className="mt-4 rounded border border-neutral-200 bg-neutral-50 px-4 py-3 text-xs font-semibold text-neutral-600">
+            웹 검색 중입니다. 최대 1분 정도 걸릴 수 있습니다...
+          </p>
+        )}
+
         {error && (
           <p className="mt-4 rounded border border-red-200 bg-red-50 px-4 py-2 text-xs font-semibold text-red-700">
             {error}
           </p>
         )}
-        {message && !error && (
-          <p className="mt-4 text-xs font-semibold text-neutral-500">{message}</p>
+        {message && !error && !searchLoading && (
+          <p className="mt-4 rounded border border-neutral-200 bg-neutral-50 px-4 py-2 text-xs font-semibold text-neutral-600">
+            {message}
+          </p>
         )}
 
         <div className="content-panel mt-8 w-full max-w-full">
           {activeTab === "search" && (
             <div className="w-full max-w-full space-y-6">
               <SearchBar onSearch={handleSearch} loading={searchLoading} />
+              <p className="text-[11px] font-semibold text-neutral-400">
+                예: Minsub Ventures, 또는 CIN 번호 (U17226KA2020PTC133195)
+              </p>
+              <p className="text-[11px] font-semibold text-neutral-400">
+                검색어 입력 후 Enter 키 또는 검색 버튼을 눌러주세요. 결과까지 10~30초 걸릴 수 있습니다.
+              </p>
 
               <SearchResults results={results} onViewDetail={handleViewDetail} />
 
               {detailLoading && (
-                <p className="py-12 text-center text-sm text-neutral-500">불러오는 중...</p>
+                <p className="py-12 text-center text-xs text-neutral-500">불러오는 중...</p>
               )}
 
               {detailProfile && !detailLoading && (

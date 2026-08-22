@@ -1,6 +1,6 @@
 import { parseCin } from "./cin-parser";
 import { enrichFromWeb, extractShareholdersFromText, isRegistryBoilerplate } from "./enricher";
-import { searchCompaniesByName } from "./mca-data";
+import { isConfiguredDataGovApiKey, searchCompaniesByName } from "./mca-data";
 import { isReadableLatinText } from "./text-utils";
 import { fetchRegistryByCin } from "./registry-scraper";
 import { generateCompanySummary } from "./summary";
@@ -8,8 +8,7 @@ import type { CompanyProfile, CompanySearchResult, Director, WebEnrichment } fro
 import { searchCompaniesByWeb } from "./web-search";
 
 function hasDataGovApiKey(): boolean {
-  const key = process.env.DATA_GOV_API_KEY;
-  return !!key && key !== "REPLACE_WITH_DATA_GOV_KEY";
+  return isConfiguredDataGovApiKey();
 }
 
 function applyWebFields(
@@ -92,6 +91,12 @@ export async function buildCompanyProfile(cin: string): Promise<CompanyProfile> 
     }
     if (registryData.email) baseData.email = registryData.email;
     if (registryData.registeredAddress) baseData.registeredOffice.address = registryData.registeredAddress;
+    if (registryData.authorizedCapitalInr) {
+      baseData.authorizedCapitalInr = registryData.authorizedCapitalInr;
+    }
+    if (registryData.paidUpCapitalInr) {
+      baseData.paidUpCapitalInr = registryData.paidUpCapitalInr;
+    }
     dataSources.push(...registryData.sources);
   }
 
@@ -102,7 +107,8 @@ export async function buildCompanyProfile(cin: string): Promise<CompanyProfile> 
     registryData?.relatedLinks ?? [],
     registryData?.description ?? null,
     registryData?.businessActivity ?? null,
-    registryData?.email ?? baseData.email
+    registryData?.email ?? baseData.email,
+    registryData?.registeredAddress ?? baseData.registeredOffice.address ?? null
   );
 
   if (registryData?.description) {
@@ -244,7 +250,8 @@ export async function searchIndianCompanies(
         return { results, source };
       }
     } catch (err) {
-      if ((err as Error).message === "DATA_GOV_API_KEY_REQUIRED") {
+      const message = (err as Error).message;
+      if (message === "DATA_GOV_API_KEY_REQUIRED" || message === "API_KEY_INVALID") {
         // fall through to web search
       } else {
         console.error("data.gov.in search error:", err);

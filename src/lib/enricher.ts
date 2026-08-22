@@ -1,4 +1,6 @@
 import type { WebEnrichment, WebInsight, WebLink } from "./types";
+import { fetchAmbitionBoxReviews } from "./ambitionbox-scraper";
+import { fetchGoogleMapsRating } from "./google-maps-scraper";
 import { fetchWebsiteReviews, fetchSnsComments, fetchWebReviewSnippets, commentsFromReviewSearch } from "./reviews-scraper";
 import { parseBusinessActivity, parseDirectorsFromText } from "./registry-scraper";
 import { buildGoogleSearchUrl, searchWeb, type WebSearchResult } from "./search-engine";
@@ -612,7 +614,8 @@ export async function enrichFromWeb(
   registryLinks: WebLink[] = [],
   registryDescription: string | null = null,
   registryBusinessActivity: string | null = null,
-  registryEmail: string | null = null
+  registryEmail: string | null = null,
+  registryAddress: string | null = null
 ): Promise<WebEnrichment> {
   const sources: string[] = [];
   const relatedLinks: WebLink[] = [...registryLinks];
@@ -812,12 +815,17 @@ export async function enrichFromWeb(
     /review|comment|feedback|rating|employee|experience|recommend/i.test(`${r.title} ${r.snippet}`)
   );
 
-  const [snsFetched, webReviewSnippets, siteReviews] = await Promise.all([
+  const [snsFetched, webReviewSnippets, siteReviews, ambitionBoxData, googleMapsData] = await Promise.all([
     fetchSnsComments(companyName),
     fetchWebReviewSnippets(companyName),
     website
       ? fetchWebsiteReviews(website, websiteData.pages, websiteData.html)
       : Promise.resolve([] as WebEnrichment["websiteReviews"]),
+    fetchAmbitionBoxReviews(companyName),
+    fetchGoogleMapsRating(
+      companyName,
+      addressMatch?.[1]?.trim() ?? registryAddress ?? websiteData.text.match(/\b\d{6}\b[^<\n]{0,120}/)?.[0] ?? null
+    ),
   ]);
 
   const mergedComments = [
@@ -850,6 +858,22 @@ export async function enrichFromWeb(
 
   if (siteReviews.length > 0) sources.push("Website Reviews");
   if (webReviewSnippets.length > 0) sources.push("Web Reviews");
+  if (ambitionBoxData.reviews.length > 0) {
+    sources.push("AmbitionBox");
+    relatedLinks.push({
+      label: "AmbitionBox Reviews",
+      url: ambitionBoxData.pageUrl ?? ambitionBoxData.reviews[0].url,
+      type: "source",
+    });
+  }
+  if (googleMapsData) {
+    sources.push("Google Maps");
+    relatedLinks.push({
+      label: "Google Maps",
+      url: googleMapsData.mapsUrl,
+      type: "source",
+    });
+  }
 
   return {
     website,
@@ -875,6 +899,13 @@ export async function enrichFromWeb(
     crawledPages: websiteData.pages,
     snsComments: snsComments.slice(0, 15),
     websiteReviews: websiteReviews.slice(0, 15),
+    employeeReviews: ambitionBoxData.reviews.slice(0, 10),
+    ambitionBoxUrl: ambitionBoxData.pageUrl,
+    ambitionBoxRating: ambitionBoxData.companyRating,
+    ambitionBoxReviewCount: ambitionBoxData.reviewCount,
+    googleMapsRating: googleMapsData?.rating ?? null,
+    googleMapsReviewCount: googleMapsData?.reviewCount ?? null,
+    googleMapsUrl: googleMapsData?.mapsUrl ?? null,
     discoveredDirectors,
   };
 }

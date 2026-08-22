@@ -78,10 +78,12 @@ export function generateCompanySummary(profile: CompanyProfile): string {
     }
   }
 
-  if (web.snsComments.length > 0 || web.websiteReviews.length > 0) {
-    parts.push(
-      `온라인 댓글·리뷰 ${web.snsComments.length + web.websiteReviews.length}건을 수집했습니다.`
-    );
+  if (web.snsComments.length > 0 || web.websiteReviews.length > 0 || web.employeeReviews.length > 0) {
+    const reviewCount = web.snsComments.length + web.websiteReviews.length + web.employeeReviews.length;
+    parts.push(`온라인 댓글·리뷰 ${reviewCount}건을 수집했습니다.`);
+    if (web.employeeReviews.length > 0) {
+      parts.push(`AmbitionBox 직원 리뷰 ${web.employeeReviews.length}건 포함.`);
+    }
   }
 
   return parts.join("\n");

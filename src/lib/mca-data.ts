@@ -5,8 +5,21 @@ const DATA_GOV_RESOURCE_ID = "5c6c25f7-9a5c-4c49-a4ef-2d26a3ea8e27";
 
 type RawRecord = Record<string, string | number | null | undefined>;
 
+const PLACEHOLDER_API_KEYS = new Set([
+  "REPLACE_WITH_DATA_GOV_KEY",
+  "your_api_key_here",
+  "YOUR_API_KEY_HERE",
+]);
+
 function getApiKey(): string | undefined {
-  return process.env.DATA_GOV_API_KEY;
+  return process.env.DATA_GOV_API_KEY?.trim();
+}
+
+export function isConfiguredDataGovApiKey(): boolean {
+  const key = getApiKey();
+  if (!key) return false;
+  if (PLACEHOLDER_API_KEYS.has(key)) return false;
+  return key.length >= 8;
 }
 
 function normalizeKey(key: string): string {
@@ -57,10 +70,11 @@ function mapRecord(record: RawRecord): CompanySearchResult {
 }
 
 async function fetchDataGov(params: Record<string, string | number>): Promise<RawRecord[]> {
-  const apiKey = getApiKey();
-  if (!apiKey) {
+  if (!isConfiguredDataGovApiKey()) {
     throw new Error("DATA_GOV_API_KEY_REQUIRED");
   }
+
+  const apiKey = getApiKey()!;
 
   const url = new URL(`${DATA_GOV_BASE}/${DATA_GOV_RESOURCE_ID}`);
   url.searchParams.set("api-key", apiKey);
@@ -88,6 +102,10 @@ export async function searchCompaniesByName(
   query: string,
   limit = 20
 ): Promise<{ results: CompanySearchResult[]; source: string }> {
+  if (!isConfiguredDataGovApiKey()) {
+    return { results: [], source: "none" };
+  }
+
   const normalizedQuery = query.trim().toUpperCase();
 
   try {
@@ -99,10 +117,9 @@ export async function searchCompaniesByName(
       return { results: exactRecords.map(mapRecord), source: "data.gov.in" };
     }
   } catch (err) {
-    if ((err as Error).message !== "DATA_GOV_API_KEY_REQUIRED") {
-      // continue to paginated search
-    } else {
-      throw err;
+    const message = (err as Error).message;
+    if (message === "DATA_GOV_API_KEY_REQUIRED" || message === "API_KEY_INVALID") {
+      return { results: [], source: "none" };
     }
   }
 
@@ -111,28 +128,36 @@ export async function searchCompaniesByName(
   const maxPages = 15;
   const pageSize = 100;
 
-  for (let page = 0; page < maxPages && results.length < limit; page++) {
-    const records = await fetchDataGov({
-      offset: page * pageSize,
-      limit: pageSize,
-    });
+  try {
+    for (let page = 0; page < maxPages && results.length < limit; page++) {
+      const records = await fetchDataGov({
+        offset: page * pageSize,
+        limit: pageSize,
+      });
 
-    if (records.length === 0) break;
+      if (records.length === 0) break;
 
-    for (const record of records) {
-      const mapped = mapRecord(record);
-      if (
-        mapped.name.toLowerCase().includes(queryLower) ||
-        mapped.cin.toLowerCase().includes(queryLower)
-      ) {
-        if (!results.some((r) => r.cin === mapped.cin)) {
-          results.push(mapped);
+      for (const record of records) {
+        const mapped = mapRecord(record);
+        if (
+          mapped.name.toLowerCase().includes(queryLower) ||
+          mapped.cin.toLowerCase().includes(queryLower)
+        ) {
+          if (!results.some((r) => r.cin === mapped.cin)) {
+            results.push(mapped);
+          }
         }
         if (results.length >= limit) break;
       }
-    }
 
-    if (records.length < pageSize) break;
+      if (records.length < pageSize) break;
+    }
+  } catch (err) {
+    const message = (err as Error).message;
+    if (message === "DATA_GOV_API_KEY_REQUIRED" || message === "API_KEY_INVALID") {
+      return { results: [], source: "none" };
+    }
+    throw err;
   }
 
   return { results, source: "data.gov.in" };

@@ -129,7 +129,7 @@ export function CompareForm({ onCompare, loading = false }: CompareFormProps) {
                 <button
                   type="button"
                   onClick={() => removeInput(i)}
-                  className="shrink-0 px-2 text-sm text-neutral-400 hover:text-neutral-900"
+                  className="shrink-0 px-2 text-xs text-neutral-400 hover:text-neutral-900"
                   aria-label="입력란 삭제"
                 >
                   ×
@@ -144,7 +144,7 @@ export function CompareForm({ onCompare, loading = false }: CompareFormProps) {
             <button
               type="button"
               onClick={addInput}
-              className="text-sm text-neutral-600 hover:text-neutral-900"
+              className="text-xs text-neutral-600 hover:text-neutral-900"
             >
               + 회사 추가
             </button>
@@ -162,13 +162,13 @@ export function CompareForm({ onCompare, loading = false }: CompareFormProps) {
       </form>
 
       {resolveError && (
-        <p className="text-sm text-red-600">{resolveError}</p>
+        <p className="text-xs text-red-600">{resolveError}</p>
       )}
 
       {slots && (
         <div className="border border-neutral-200 bg-white shadow-sm">
           <div className="border-b border-neutral-200 bg-neutral-50 px-4 py-3">
-            <h3 className="text-sm font-semibold text-neutral-900">회사 선택</h3>
+            <h3 className="text-xs font-semibold text-neutral-900">회사 선택</h3>
             <p className="mt-0.5 text-xs text-neutral-500">
               검색 결과에서 맞는 회사를 선택하세요
             </p>
@@ -182,7 +182,7 @@ export function CompareForm({ onCompare, loading = false }: CompareFormProps) {
                 </p>
 
                 {slot.results.length === 0 ? (
-                  <p className="mt-2 text-sm text-red-600">검색 결과가 없습니다.</p>
+                  <p className="mt-2 text-xs text-red-600">검색 결과가 없습니다.</p>
                 ) : (
                   <ul className="mt-2 space-y-1">
                     {slot.results.map((result) => {
@@ -193,7 +193,7 @@ export function CompareForm({ onCompare, loading = false }: CompareFormProps) {
                             type="button"
                             onClick={() => selectCompany(slotIndex, result)}
                             className={clsx(
-                              "w-full border px-3 py-2 text-left text-sm transition",
+                              "w-full border px-3 py-2 text-left text-xs transition",
                               isSelected
                                 ? "border-neutral-900 bg-neutral-900 text-white"
                                 : "border-neutral-200 hover:border-neutral-400"
@@ -233,7 +233,7 @@ export function CompareForm({ onCompare, loading = false }: CompareFormProps) {
               type="button"
               onClick={handleCompare}
               disabled={loading || selectedCount < 2 || !allSelected}
-              className="w-full border border-neutral-900 bg-neutral-900 py-2.5 text-sm font-medium text-white hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-40"
+              className="w-full border border-neutral-900 bg-neutral-900 py-2 text-xs font-medium text-white hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-40"
             >
               {loading
                 ? "비교 분석 중..."

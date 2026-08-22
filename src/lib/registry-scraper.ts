@@ -17,6 +17,8 @@ export interface RegistryCompanyData {
   listingStatus?: string;
   description?: string;
   businessActivity?: string;
+  authorizedCapitalInr?: number;
+  paidUpCapitalInr?: number;
   directors: Director[];
   relatedLinks: WebLink[];
   sources: string[];
@@ -97,6 +99,31 @@ function extractJsonLdOrganization(jsonLd: Record<string, unknown> | null): Reco
     | undefined) ?? null;
 }
 
+function parseCapitalAmount(value: string | number | null | undefined): number | null {
+  if (value === null || value === undefined) return null;
+  const normalized = String(value).replace(/,/g, "").trim();
+  if (!normalized) return null;
+  const amount = parseInt(normalized, 10);
+  return Number.isFinite(amount) && amount > 0 ? amount : null;
+}
+
+function parseCapitalFromText(text: string): {
+  authorizedCapitalInr: number | null;
+  paidUpCapitalInr: number | null;
+} {
+  const authorizedMatch = text.match(
+    /(?:authorised|authorized)\s+capital(?:\s+is)?\s*(?:rs\.?|inr|₹)?\s*([\d,]+)/i
+  );
+  const paidUpMatch = text.match(
+    /(?:paid[\s-]*up|paidup)\s+capital(?:\s+is)?\s*(?:rs\.?|inr|₹)?\s*([\d,]+)/i
+  );
+
+  return {
+    authorizedCapitalInr: parseCapitalAmount(authorizedMatch?.[1] ?? null),
+    paidUpCapitalInr: parseCapitalAmount(paidUpMatch?.[1] ?? null),
+  };
+}
+
 function parseQorpiqEmbeddedProfile(html: string): Partial<RegistryCompanyData> | null {
   const match = html.match(/var _hono_view\s*=\s*(\{[\s\S]*?\});\s*<\/script>/);
   if (!match) return null;
@@ -113,6 +140,8 @@ function parseQorpiqEmbeddedProfile(html: string): Partial<RegistryCompanyData> 
           registeredAddress?: string;
           rocName?: string;
           registrationNumber?: string;
+          authorizedCapital?: string | number;
+          paidUpCapital?: string | number;
           directors?: Array<{
             din?: string;
             name?: string;
@@ -146,6 +175,8 @@ function parseQorpiqEmbeddedProfile(html: string): Partial<RegistryCompanyData> 
       dateOfIncorporation: profile.dateOfIncorporation,
       registeredAddress: profile.registeredAddress,
       businessActivity: profile.activityDescription,
+      authorizedCapitalInr: parseCapitalAmount(profile.authorizedCapital) ?? undefined,
+      paidUpCapitalInr: parseCapitalAmount(profile.paidUpCapital) ?? undefined,
       directors,
       sources: ["QorpIQ"],
     };
@@ -256,6 +287,7 @@ function parseQorpiqPage(html: string, cin: string): Partial<RegistryCompanyData
 
   const metaDescription = extractMeta(html, "description");
   const description = metaDescription || jsonDescription || undefined;
+  const capital = parseCapitalFromText(jsonDescription || text);
 
   return {
     name,
@@ -267,6 +299,8 @@ function parseQorpiqPage(html: string, cin: string): Partial<RegistryCompanyData
     registeredAddress: address,
     description,
     businessActivity: businessActivity ?? undefined,
+    authorizedCapitalInr: capital.authorizedCapitalInr ?? undefined,
+    paidUpCapitalInr: capital.paidUpCapitalInr ?? undefined,
     directors,
     relatedLinks: [
       {
@@ -293,6 +327,7 @@ function parseIndiaFilingsPage(html: string, cin: string): Partial<RegistryCompa
   const statusMatch = html.match(/Company Status[^A-Za-z]*(Active|Inactive)/i);
   const incorporation = html.match(/Date of Incorporation[^0-9]*(\d{2}-\d{2}-\d{4})/i)?.[1];
   const address = html.match(/Registered Address[^A-Za-z0-9]+([^<|]{20,180})/i)?.[1]?.trim();
+  const capital = parseCapitalFromText(htmlToText(html));
 
   const directors: Director[] = [];
   const directorMatches = html.matchAll(
@@ -317,6 +352,8 @@ function parseIndiaFilingsPage(html: string, cin: string): Partial<RegistryCompa
     registeredAddress: address,
     email: emails[0],
     description: extractMeta(html, "description") ?? undefined,
+    authorizedCapitalInr: capital.authorizedCapitalInr ?? undefined,
+    paidUpCapitalInr: capital.paidUpCapitalInr ?? undefined,
     directors,
     relatedLinks: slug
       ? [
@@ -364,6 +401,12 @@ function mergeRegistryData(
     if (!merged.listingStatus && part.listingStatus) merged.listingStatus = part.listingStatus;
     if (!merged.description && part.description) merged.description = part.description;
     if (!merged.businessActivity && part.businessActivity) merged.businessActivity = part.businessActivity;
+    if (!merged.authorizedCapitalInr && part.authorizedCapitalInr) {
+      merged.authorizedCapitalInr = part.authorizedCapitalInr;
+    }
+    if (!merged.paidUpCapitalInr && part.paidUpCapitalInr) {
+      merged.paidUpCapitalInr = part.paidUpCapitalInr;
+    }
     if (part.directors?.length) {
       for (const director of part.directors) {
         const existing = merged.directors.find(
