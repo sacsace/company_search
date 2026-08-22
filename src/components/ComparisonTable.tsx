@@ -29,21 +29,21 @@ export function ComparisonTable({
   }
 
   return (
-    <div className="space-y-4">
+    <div className="w-full space-y-4">
       <div className="border border-neutral-200 bg-neutral-50 px-4 py-3">
         <h2 className="text-sm font-semibold text-neutral-900">비교 요약</h2>
         <p className="mt-1 text-sm leading-relaxed text-neutral-600">{summary}</p>
       </div>
 
-      <div className="overflow-x-auto border border-neutral-200">
-        <table className="w-full min-w-[600px] text-sm">
+      <div className="w-full overflow-x-auto border border-neutral-200">
+        <table className="w-full table-fixed text-sm">
           <thead>
             <tr className="border-b border-neutral-200 bg-neutral-50">
-              <th className="sticky left-0 bg-neutral-50 px-4 py-2.5 text-left text-xs font-medium text-neutral-500">
+              <th className="w-32 bg-neutral-50 px-4 py-2.5 text-left text-xs font-medium text-neutral-500 sm:w-40">
                 항목
               </th>
               {companyNames.map((name, i) => (
-                <th key={i} className="px-4 py-2.5 text-left text-xs font-medium text-neutral-900">
+                <th key={i} className="px-4 py-2.5 text-left text-xs font-medium text-neutral-900 break-words">
                   {name}
                 </th>
               ))}
@@ -52,7 +52,7 @@ export function ComparisonTable({
           <tbody>
             {fields.map((field) => (
               <tr key={field.key} className="border-b border-neutral-100">
-                <td className="sticky left-0 bg-white px-4 py-2.5 text-xs text-neutral-500">
+                <td className="bg-white px-4 py-2.5 text-xs text-neutral-500 align-top">
                   {field.label}
                 </td>
                 {field.values.map((value, i) => {
@@ -62,7 +62,7 @@ export function ComparisonTable({
                       : String(value ?? "—");
 
                   return (
-                    <td key={i} className="px-4 py-2.5 text-sm text-neutral-800">
+                    <td key={i} className="px-4 py-2.5 text-sm text-neutral-800 align-top break-words">
                       {displayValue}
                     </td>
                   );

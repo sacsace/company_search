@@ -87,7 +87,7 @@ export async function buildCompanyProfile(cin: string): Promise<CompanyProfile> 
     if (registryData.status && baseData.status === "Unknown") baseData.status = registryData.status;
     if (registryData.type && !baseData.type) baseData.type = registryData.type;
     if (registryData.roc) baseData.roc = registryData.roc;
-    if (registryData.dateOfIncorporation && !baseData.dateOfIncorporation) {
+    if (registryData.dateOfIncorporation) {
       baseData.dateOfIncorporation = registryData.dateOfIncorporation;
     }
     if (registryData.email) baseData.email = registryData.email;
@@ -100,12 +100,18 @@ export async function buildCompanyProfile(cin: string): Promise<CompanyProfile> 
     searchName,
     normalizedCin,
     registryData?.relatedLinks ?? [],
-    registryData?.description ?? null
+    registryData?.description ?? null,
+    registryData?.businessActivity ?? null,
+    registryData?.email ?? baseData.email
   );
 
   if (registryData?.description) {
     if (!webEnrichment.description) webEnrichment.description = registryData.description;
-    if (!webEnrichment.businessDescription && !isRegistryBoilerplate(registryData.description) && isReadableLatinText(registryData.description)) {
+    if (
+      !webEnrichment.businessDescription &&
+      !isRegistryBoilerplate(registryData.description) &&
+      isReadableLatinText(registryData.description)
+    ) {
       webEnrichment.businessDescription = registryData.description;
     }
     if (webEnrichment.rawSnippets.length === 0) {
@@ -128,9 +134,21 @@ export async function buildCompanyProfile(cin: string): Promise<CompanyProfile> 
     webEnrichment.businessDescription = `${searchName} — ${cinParsed.industryDescription} (NIC ${cinParsed.industryCode})`;
   }
 
+  if (registryData?.businessActivity) {
+    baseData.industry = registryData.businessActivity;
+  }
+
   applyWebFields(baseData, registryData, webEnrichment);
 
-  const directors: Director[] = registryData?.directors ?? [];
+  const directors: Director[] = [...(registryData?.directors ?? [])];
+  for (const director of webEnrichment.discoveredDirectors ?? []) {
+    const exists = directors.some(
+      (d) =>
+        (d.din && director.din && d.din === director.din) ||
+        d.name.toLowerCase() === director.name.toLowerCase()
+    );
+    if (!exists) directors.push(director);
+  }
   if (webEnrichment.sources.length > 0) {
     dataSources.push(...webEnrichment.sources);
   }

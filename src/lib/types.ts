@@ -85,6 +85,7 @@ export interface WebEnrichment {
   crawledPages: { url: string; title: string }[];
   snsComments: PublicComment[];
   websiteReviews: WebsiteReview[];
+  discoveredDirectors: Director[];
 }
 
 export interface CompanyProfile {

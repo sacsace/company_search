@@ -1,5 +1,6 @@
 import type { WebEnrichment, WebInsight, WebLink } from "./types";
 import { fetchWebsiteReviews, fetchSnsComments, fetchWebReviewSnippets, commentsFromReviewSearch } from "./reviews-scraper";
+import { parseBusinessActivity, parseDirectorsFromText } from "./registry-scraper";
 import { buildGoogleSearchUrl, searchWeb, type WebSearchResult } from "./search-engine";
 import { isSafeOutboundUrl } from "./security-utils";
 import { hasCjkText, isForeignSiteUrl, isReadableLatinText, isRelevantSearchResult, isUsefulCommentText, sanitizeWebText } from "./text-utils";
@@ -249,6 +250,157 @@ function extractRevenue(text: string): { revenue: string | null; year: string | 
   return { revenue: null, year: null };
 }
 
+const GENERIC_EMAIL_DOMAINS = new Set([
+  "gmail.com",
+  "yahoo.com",
+  "hotmail.com",
+  "outlook.com",
+  "rediffmail.com",
+  "indiafilings.com",
+  "qorpiq.com",
+  "infyner.com",
+]);
+
+const UNRELATED_WEBSITE_DOMAINS = [
+  "walmart.com",
+  "amazon.com",
+  "nissanpartsdeal.com",
+  "ebay.com",
+  "alibaba.com",
+  "flipkart.com",
+  "justdial.com",
+  "mouthshut.com",
+  "glassdoor.com",
+  "indeed.com",
+  "yelp.com",
+  "tripadvisor.com",
+  "yellowpages.com",
+  "crunchbase.com",
+  "bloomberg.com",
+];
+
+function companyNameTokens(companyName: string): string[] {
+  return companyName
+    .toLowerCase()
+    .replace(/\b(private|limited|ltd|pvt|llp|inc|corp|company|co|india)\b/gi, "")
+    .split(/\s+/)
+    .map((token) => token.replace(/[^a-z0-9]/g, ""))
+    .filter((token) => token.length >= 3);
+}
+
+function websiteFromEmail(email: string | null | undefined): string | null {
+  if (!email) return null;
+  const match = email.match(/@([a-z0-9.-]+\.[a-z]{2,})/i);
+  if (!match) return null;
+  const domain = match[1].toLowerCase();
+  if (GENERIC_EMAIL_DOMAINS.has(domain)) return null;
+  return `https://${domain}`;
+}
+
+function scoreWebsiteCandidate(
+  url: string,
+  companyName: string,
+  context = ""
+): number {
+  if (isAggregatorUrl(url) || isBlacklisted(url) || isForeignSiteUrl(url) || hasCjkText(url)) {
+    return -1;
+  }
+
+  let host = "";
+  try {
+    host = new URL(url).hostname.replace(/^www\./, "").toLowerCase();
+  } catch {
+    return -1;
+  }
+
+  if (UNRELATED_WEBSITE_DOMAINS.some((domain) => host === domain || host.endsWith(`.${domain}`))) {
+    return -1;
+  }
+
+  const tokens = companyNameTokens(companyName);
+  const hostBase = host.split(".")[0] ?? "";
+  const haystack = `${host} ${context}`.toLowerCase();
+  let score = 0;
+
+  for (const token of tokens) {
+    if (host.includes(token)) score += 12;
+    if (hostBase.includes(token)) score += 8;
+    if (haystack.includes(token)) score += 3;
+  }
+
+  if (/\.(in|co\.in)$/.test(host)) score += 4;
+  if (/official|homepage|home page|our website/i.test(context)) score += 6;
+  if (/review|directory|profile|cin|mca|filings|search|lookup/i.test(context)) score -= 8;
+  if (/parts|store-finder|shop|buy|cart|dealer/i.test(`${host} ${context}`)) score -= 10;
+
+  return score;
+}
+
+function pickBestWebsite(
+  candidates: Array<{ url: string; context?: string }>,
+  companyName: string
+): string | null {
+  const scored = candidates
+    .map((candidate) => ({
+      url: candidate.url,
+      score: scoreWebsiteCandidate(candidate.url, companyName, candidate.context ?? ""),
+    }))
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  return scored[0]?.url ?? null;
+}
+
+async function resolveCompanyWebsite(
+  companyName: string,
+  cin: string,
+  searchResults: WebSearchResult[],
+  registryEmail?: string | null
+): Promise<string | null> {
+  const candidates: Array<{ url: string; context?: string }> = [];
+
+  const emailWebsite = websiteFromEmail(registryEmail);
+  if (emailWebsite) {
+    candidates.push({ url: emailWebsite, context: "registry email domain" });
+  }
+
+  for (const result of searchResults) {
+    candidates.push({
+      url: result.url,
+      context: `${result.title} ${result.snippet}`,
+    });
+  }
+
+  const websiteSearch = await searchWeb(`"${companyName}" official website India`, 6);
+  for (const result of websiteSearch) {
+    candidates.push({
+      url: result.url,
+      context: `${result.title} ${result.snippet} official website`,
+    });
+  }
+
+  const best = pickBestWebsite(candidates, companyName);
+  if (best) return best;
+
+  for (const domain of guessDomain(companyName)) {
+    const score = scoreWebsiteCandidate(domain, companyName, "guessed domain");
+    if (score <= 0) continue;
+    try {
+      const res = await fetch(domain, {
+        method: "HEAD",
+        headers: { "User-Agent": USER_AGENT },
+        signal: AbortSignal.timeout(5000),
+        redirect: "follow",
+      });
+      if (res.ok) return domain;
+    } catch {
+      // skip
+    }
+  }
+
+  return emailWebsite;
+}
+
 function guessDomain(companyName: string): string[] {
   const slug = companyName
     .toLowerCase()
@@ -264,38 +416,6 @@ function guessDomain(companyName: string): string[] {
     `https://${slug}.in`,
     `https://www.${slug}.co.in`,
   ];
-}
-
-async function discoverWebsite(companyName: string, cin: string): Promise<string | null> {
-  const queries = [`"${companyName}" official website India`, `"${companyName}" ${cin} site`];
-
-  for (const q of queries) {
-    const results = await searchWeb(q, 5);
-    for (const result of results) {
-      if (
-        !isBlacklisted(result.url) &&
-        !isAggregatorUrl(result.url)
-      ) {
-        return result.url;
-      }
-    }
-  }
-
-  for (const domain of guessDomain(companyName)) {
-    try {
-      const res = await fetch(domain, {
-        method: "HEAD",
-        headers: { "User-Agent": USER_AGENT },
-        signal: AbortSignal.timeout(5000),
-        redirect: "follow",
-      });
-      if (res.ok) return domain;
-    } catch {
-      // skip
-    }
-  }
-
-  return null;
 }
 
 interface SearchSnippet {
@@ -490,7 +610,9 @@ export async function enrichFromWeb(
   companyName: string,
   cin: string,
   registryLinks: WebLink[] = [],
-  registryDescription: string | null = null
+  registryDescription: string | null = null,
+  registryBusinessActivity: string | null = null,
+  registryEmail: string | null = null
 ): Promise<WebEnrichment> {
   const sources: string[] = [];
   const relatedLinks: WebLink[] = [...registryLinks];
@@ -505,7 +627,8 @@ export async function enrichFromWeb(
     type: "source",
   });
 
-  const [mainResults, linkedInResults, googleReviewResults, snsResults] = await Promise.all([
+  const [mainResults, linkedInResults, googleReviewResults, snsResults, directorResults, businessResults] =
+    await Promise.all([
     searchWeb(`"${companyName}" ${cin} India company revenue employees founded`, 6),
     searchWeb(`"${companyName}" site:linkedin.com/company India`, 4),
     searchWeb(`"${companyName}" google reviews ratings India`, 6),
@@ -513,6 +636,8 @@ export async function enrichFromWeb(
       `"${companyName}" site:facebook.com OR site:instagram.com OR site:twitter.com OR site:youtube.com`,
       5
     ),
+    searchWeb(`"${companyName}" ${cin} directors DIN India MCA`, 5),
+    searchWeb(`"${companyName}" ${cin} business activity what does company do India`, 5),
   ]);
 
   for (const result of mainResults) {
@@ -522,6 +647,18 @@ export async function enrichFromWeb(
     relatedLinks.push({ label: result.title, url: result.url, type: "source" });
   }
   if (mainResults.length > 0) sources.push("Web Search");
+
+  for (const result of [...directorResults, ...businessResults]) {
+    if (isBlacklisted(result.url) || !isRelevantSearchResult(result)) continue;
+    combinedText += " " + result.snippet;
+    rawSnippets.push({ text: result.snippet, source: result.title, url: result.url });
+    relatedLinks.push({ label: result.title, url: result.url, type: "source" });
+  }
+  if (directorResults.length > 0 || businessResults.length > 0) sources.push("Web Search");
+
+  const discoveredDirectors = parseDirectorsFromText(
+    [...directorResults, ...mainResults, ...businessResults].map((r) => `${r.title} ${r.snippet}`).join(" ")
+  );
 
   const linkedInUrl = findLinkedInUrl(linkedInResults);
   if (linkedInUrl) {
@@ -542,7 +679,11 @@ export async function enrichFromWeb(
     (link) => link.type === "source" && !isBlacklisted(link.url) && !isAggregatorUrl(link.url)
   )?.url;
 
-  let website = websiteFromSearch ?? (await discoverWebsite(companyName, cin));
+  const allSearchResults = [...mainResults, ...directorResults, ...businessResults];
+  let website: string | null =
+    (await resolveCompanyWebsite(companyName, cin, allSearchResults, registryEmail)) ??
+    websiteFromSearch ??
+    null;
   if (website && (isAggregatorUrl(website) || isForeignSiteUrl(website) || hasCjkText(website))) {
     website = null;
   }
@@ -580,7 +721,11 @@ export async function enrichFromWeb(
   const employeesMatch = extractEmployees(combinedText);
   const foundedDate = extractFoundedDate(combinedText);
   const businessDescriptionRaw =
+    (registryBusinessActivity && isReadableLatinText(registryBusinessActivity)
+      ? registryBusinessActivity.trim()
+      : null) ||
     (registryDescription && !isRegistryBoilerplate(registryDescription) ? registryDescription.trim() : null) ||
+    parseBusinessActivity(combinedText) ||
     extractBusinessDescription(combinedText, companyName, rawSnippets) ||
     description ||
     industryMatch?.[1]?.trim() ||
@@ -730,6 +875,7 @@ export async function enrichFromWeb(
     crawledPages: websiteData.pages,
     snsComments: snsComments.slice(0, 15),
     websiteReviews: websiteReviews.slice(0, 15),
+    discoveredDirectors,
   };
 }
 

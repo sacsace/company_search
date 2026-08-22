@@ -12,7 +12,7 @@ export function SearchResults({ results, onViewDetail }: SearchResultsProps) {
   if (results.length === 0) return null;
 
   return (
-    <div className="border border-neutral-200 bg-white shadow-sm">
+    <div className="w-full border border-neutral-200 bg-white shadow-sm">
       <div className="border-b border-neutral-200 bg-neutral-50 px-4 py-2 text-[11px] font-semibold text-neutral-500">
         {results.length}건
       </div>

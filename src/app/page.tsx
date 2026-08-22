@@ -98,9 +98,9 @@ export default function Home() {
   };
 
   return (
-    <div className="min-h-screen">
-      <header className="border-b border-neutral-200 bg-white">
-        <div className="page-container flex items-center justify-between py-4">
+    <div className="app-shell min-h-screen w-full max-w-full">
+      <header className="app-header w-full border-b border-neutral-200 bg-white">
+        <div className="page-container flex w-full max-w-full items-center justify-between py-4">
           <div>
             <RightsBanner />
             <h1 className="mt-1 text-base font-bold tracking-tight text-neutral-900">
@@ -112,8 +112,8 @@ export default function Home() {
         </div>
       </header>
 
-      <main className="page-container py-8">
-        <div className="border-b border-neutral-200">
+      <main className="app-main page-container w-full max-w-full py-8">
+        <div className="content-panel w-full max-w-full border-b border-neutral-200">
           <div className="flex gap-1">
             <button
               onClick={() => setActiveTab("search")}
@@ -147,9 +147,9 @@ export default function Home() {
           <p className="mt-4 text-xs font-semibold text-neutral-500">{message}</p>
         )}
 
-        <div className="mt-8">
+        <div className="content-panel mt-8 w-full max-w-full">
           {activeTab === "search" && (
-            <div className="space-y-6">
+            <div className="w-full max-w-full space-y-6">
               <SearchBar onSearch={handleSearch} loading={searchLoading} />
 
               <SearchResults results={results} onViewDetail={handleViewDetail} />
@@ -165,7 +165,7 @@ export default function Home() {
           )}
 
           {activeTab === "compare" && (
-            <div className="space-y-6">
+            <div className="w-full max-w-full space-y-6">
               <CompareForm onCompare={handleCompare} loading={compareLoading} />
 
               {(compareLoading || compareFields.length > 0) && (

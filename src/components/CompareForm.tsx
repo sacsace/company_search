@@ -105,7 +105,7 @@ export function CompareForm({ onCompare, loading = false }: CompareFormProps) {
     slotsWithResults.length > 0 && slotsWithResults.every((s) => s.selected);
 
   return (
-    <div className="space-y-4">
+    <div className="w-full space-y-4">
       <form onSubmit={handleResolve} className="border border-neutral-200 bg-white shadow-sm">
         <div className="border-b border-neutral-200 bg-neutral-50 px-4 py-3">
           <h2 className="text-xs font-bold text-neutral-900">기업 비교</h2>

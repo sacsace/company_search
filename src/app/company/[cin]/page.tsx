@@ -12,9 +12,9 @@ export default async function CompanyPage({
   const profile = await buildCompanyProfile(cin);
 
   return (
-    <div className="min-h-screen">
-      <header className="border-b border-neutral-200 bg-white">
-        <div className="page-container py-5">
+    <div className="app-shell min-h-screen w-full max-w-full">
+      <header className="app-header w-full border-b border-neutral-200 bg-white">
+        <div className="page-container w-full max-w-full py-5">
           <RightsBanner />
           <div className="mt-2 flex items-center justify-between">
             <Link href="/" className="text-sm text-neutral-500 hover:text-neutral-900">
@@ -25,8 +25,10 @@ export default async function CompanyPage({
         </div>
       </header>
 
-      <main className="page-container py-8">
-        <CompanyDetail profile={profile} />
+      <main className="app-main page-container w-full max-w-full py-8">
+        <div className="content-panel w-full max-w-full">
+          <CompanyDetail profile={profile} />
+        </div>
       </main>
     </div>
   );

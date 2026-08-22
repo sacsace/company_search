@@ -19,8 +19,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="ko">
-      <body className={`${inter.variable} font-sans antialiased`}>{children}</body>
+    <html lang="ko" className="h-full w-full">
+      <body className={`${inter.variable} h-full w-full max-w-full font-sans antialiased`}>{children}</body>
     </html>
   );
 }

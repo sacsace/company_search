@@ -8,19 +8,92 @@
   --muted: #737373;
   --border: #e5e5e5;
   --accent: #171717;
+  --page-padding: 1rem;
+}
+
+@media (min-width: 640px) {
+  :root {
+    --page-padding: 1.5rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  :root {
+    --page-padding: 2rem;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  padding: 0;
 }
 
 body {
   color: var(--foreground);
   background: var(--background);
   min-height: 100vh;
+  overflow-x: hidden;
   font-size: 0.8125rem;
   font-weight: 600;
   -webkit-font-smoothing: antialiased;
 }
 
+.app-shell {
+  display: flex;
+  min-height: 100vh;
+  width: 100%;
+  max-width: 100%;
+  flex-direction: column;
+}
+
+.app-header,
+.app-main {
+  width: 100%;
+  max-width: 100%;
+}
+
+.page-container {
+  width: 100%;
+  max-width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+  padding-left: var(--page-padding);
+  padding-right: var(--page-padding);
+}
+
+.search-form {
+  display: flex;
+  width: 100%;
+  max-width: 100%;
+  gap: 0.75rem;
+}
+
+.search-form input {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+}
+
+.search-form button {
+  flex: 0 0 auto;
+}
+
+.content-panel {
+  width: 100%;
+  max-width: 100%;
+}
+
 @layer components {
   .page-container {
-    @apply mx-auto w-full max-w-page px-6 sm:px-8;
+    @apply w-full max-w-full;
   }
 }

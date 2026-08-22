@@ -16,6 +16,7 @@ export interface RegistryCompanyData {
   email?: string;
   listingStatus?: string;
   description?: string;
+  businessActivity?: string;
   directors: Director[];
   relatedLinks: WebLink[];
   sources: string[];
@@ -76,18 +77,185 @@ function extractCompanyEmails(html: string): string[] {
   );
 }
 
+function parseJsonLd(html: string): Record<string, unknown> | null {
+  const match = html.match(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/i);
+  if (!match) return null;
+  try {
+    return JSON.parse(match[1]) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function extractJsonLdOrganization(jsonLd: Record<string, unknown> | null): Record<string, unknown> | null {
+  if (!jsonLd) return null;
+  if (jsonLd["@type"] === "Organization") return jsonLd;
+  const graph = jsonLd["@graph"];
+  if (!Array.isArray(graph)) return null;
+  return (graph.find((node) => (node as Record<string, unknown>)["@type"] === "Organization") as
+    | Record<string, unknown>
+    | undefined) ?? null;
+}
+
+function parseQorpiqEmbeddedProfile(html: string): Partial<RegistryCompanyData> | null {
+  const match = html.match(/var _hono_view\s*=\s*(\{[\s\S]*?\});\s*<\/script>/);
+  if (!match) return null;
+
+  try {
+    const data = JSON.parse(match[1]) as {
+      props?: {
+        profile?: {
+          companyName?: string;
+          activityDescription?: string;
+          activityCode?: string;
+          status?: string;
+          dateOfIncorporation?: string;
+          registeredAddress?: string;
+          rocName?: string;
+          registrationNumber?: string;
+          directors?: Array<{
+            din?: string;
+            name?: string;
+            designation?: string;
+            appointmentDate?: string;
+            ceased?: boolean;
+          }>;
+        };
+      };
+    };
+
+    const profile = data.props?.profile;
+    if (!profile?.companyName) return null;
+
+    const directors: Director[] = (profile.directors ?? [])
+      .filter((d) => d.name && !d.ceased)
+      .map((d) => ({
+        din: d.din ?? "",
+        name: d.name!.replace(/^\.+\s*/, "").replace(/\s+/g, " ").trim(),
+        designation: d.designation ?? "Director",
+        appointmentDate: d.appointmentDate?.split(" ")[0] ?? "",
+        cessationDate: null,
+        status: "Current" as const,
+      }));
+
+    return {
+      name: profile.companyName,
+      status: profile.status,
+      roc: profile.rocName,
+      registrationNumber: profile.registrationNumber,
+      dateOfIncorporation: profile.dateOfIncorporation,
+      registeredAddress: profile.registeredAddress,
+      businessActivity: profile.activityDescription,
+      directors,
+      sources: ["QorpIQ"],
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function parseDirectorsFromText(text: string): Director[] {
+  const patterns = [
+    /Directors of [^.]+ are\s*\.?\s*([^.]+)\./i,
+    /directors?[:\s]+([A-Z][A-Za-z\s.]+(?:, [A-Z][A-Za-z\s.]+){1,10})/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (!match?.[1]) continue;
+
+    const names = match[1]
+      .split(",")
+      .map((name) => name.trim().replace(/^\.+\s*/, "").replace(/\s+/g, " "))
+      .filter((name) => name.length > 2 && /^[A-Za-z\s.]+$/.test(name));
+
+    if (names.length > 0) {
+      return names.map((name) => ({
+        din: "",
+        name,
+        designation: "Director",
+        appointmentDate: "",
+        cessationDate: null,
+        status: "Current" as const,
+      }));
+    }
+  }
+
+  const dinMatches = [...text.matchAll(/(\d{8})\s*\|\s*([A-Z][A-Z\s]+)\s*\|\s*(\d{2}-\d{2}-\d{4})/g)];
+  if (dinMatches.length > 0) {
+    return dinMatches.map((m) => ({
+      din: m[1],
+      name: m[2].trim(),
+      designation: "Director",
+      appointmentDate: m[3],
+      cessationDate: null,
+      status: "Current" as const,
+    }));
+  }
+
+  return [];
+}
+
+export function parseBusinessActivity(text: string): string | null {
+  const patterns = [
+    /principal business activity is\s+([^.]+)/i,
+    /primarily engaged in\s+([^.]{5,120})/i,
+    /operates in the\s+([^.]{5,120})\s+sector/i,
+    /engaged in\s+([^.]{10,120})/i,
+    /business activity[:\s]+([^.]{10,120})/i,
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (!match?.[1]) continue;
+    const value = match[1].trim();
+    if (/ROC records|NIC classification|vendor checks|MCA profile/i.test(value)) continue;
+    return value;
+  }
+  return null;
+}
+
 function parseQorpiqPage(html: string, cin: string): Partial<RegistryCompanyData> | null {
   const title = html.match(/<title>([^<|]+)/i)?.[1]?.trim();
   const name = title?.replace(/\s+MCA Profile.*$/i, "").trim();
   if (!name) return null;
 
   const text = htmlToText(html);
+  const jsonLd = parseJsonLd(html);
+  const organization = extractJsonLdOrganization(jsonLd);
+  const jsonDescription =
+    typeof organization?.description === "string" ? organization.description : "";
+  const jsonFounding =
+    typeof organization?.foundingDate === "string" ? organization.foundingDate : undefined;
+
+  const jsonMembers = Array.isArray(organization?.member)
+    ? (organization.member as Array<{ name?: string; jobTitle?: string }>)
+    : [];
+  const jsonDirectors: Director[] = jsonMembers
+    .filter((m) => m.name)
+    .map((m) => ({
+      din: "",
+      name: m.name!.replace(/^\.+\s*/, "").replace(/\s+/g, " ").trim(),
+      designation: m.jobTitle ?? "Director",
+      appointmentDate: "",
+      cessationDate: null,
+      status: "Current" as const,
+    }));
+
   const slug = html.match(new RegExp(`/company/([a-z0-9-]+)/${cin}`, "i"))?.[1];
-  const status = text.match(/\bStatus\s+(Active|Inactive|Struck Off|Amalgamated)\b/i)?.[1];
+  const status =
+    text.match(/\bStatus\s+(Active|Inactive|Struck Off|Amalgamated)\b/i)?.[1] ??
+    jsonDescription.match(/status of [^-]+-\s*(Active|Inactive)/i)?.[1];
   const roc = text.match(/ROC\s+([A-Za-z\s-]+?)\s+Registration/i)?.[1]?.trim();
   const registrationNumber = text.match(/Registration no\.?\s*(\d+)/i)?.[1];
-  const incorporated = text.match(/Incorporated\s+([0-9a-zA-Z ,]+?)\s+ROC/i)?.[1]?.trim();
+  const incorporated =
+    text.match(/Incorporated\s+([0-9a-zA-Z ,]+?)\s+ROC/i)?.[1]?.trim() ?? jsonFounding;
   const address = text.match(/Registered office[^A-Za-z0-9]+([A-Za-z0-9 ,.\/-]{20,180})/i)?.[1]?.trim();
+  const businessActivity = parseBusinessActivity(jsonDescription || text);
+  const directors =
+    jsonDirectors.length > 0 ? jsonDirectors : parseDirectorsFromText(jsonDescription || text);
+
+  const metaDescription = extractMeta(html, "description");
+  const description = metaDescription || jsonDescription || undefined;
 
   return {
     name,
@@ -97,7 +265,9 @@ function parseQorpiqPage(html: string, cin: string): Partial<RegistryCompanyData
     registrationNumber,
     dateOfIncorporation: incorporated,
     registeredAddress: address,
-    description: extractMeta(html, "description") ?? undefined,
+    description,
+    businessActivity: businessActivity ?? undefined,
+    directors,
     relatedLinks: [
       {
         label: `QorpIQ - ${name}`,
@@ -193,7 +363,23 @@ function mergeRegistryData(
     if (!merged.email && part.email) merged.email = part.email;
     if (!merged.listingStatus && part.listingStatus) merged.listingStatus = part.listingStatus;
     if (!merged.description && part.description) merged.description = part.description;
-    if (part.directors?.length) merged.directors.push(...part.directors);
+    if (!merged.businessActivity && part.businessActivity) merged.businessActivity = part.businessActivity;
+    if (part.directors?.length) {
+      for (const director of part.directors) {
+        const existing = merged.directors.find(
+          (d) =>
+            (d.din && director.din && d.din === director.din) ||
+            d.name.toLowerCase() === director.name.toLowerCase()
+        );
+        if (!existing) {
+          merged.directors.push(director);
+        } else if (!existing.din && director.din) {
+          existing.din = director.din;
+          if (director.designation) existing.designation = director.designation;
+          if (director.appointmentDate) existing.appointmentDate = director.appointmentDate;
+        }
+      }
+    }
     if (part.relatedLinks?.length) merged.relatedLinks.push(...part.relatedLinks);
     if (part.sources?.length) merged.sources.push(...part.sources);
   }
@@ -229,16 +415,20 @@ export async function fetchRegistryByCin(cin: string): Promise<RegistryCompanyDa
   const normalizedCin = cin.toUpperCase().trim();
   const qorpiqHtml = await fetchHtml(`https://qorpiq.com/company/${normalizedCin}`);
   const qorpiqData = qorpiqHtml ? parseQorpiqPage(qorpiqHtml, normalizedCin) : null;
+  const qorpiqEmbedded = qorpiqHtml ? parseQorpiqEmbeddedProfile(qorpiqHtml) : null;
 
   let indiaFilingsData: Partial<RegistryCompanyData> | null = null;
-  if (qorpiqData?.slug) {
+  const slug =
+    qorpiqData?.slug ??
+    qorpiqHtml?.match(new RegExp(`/company/([a-z0-9-]+)/${normalizedCin}`, "i"))?.[1];
+  if (slug) {
     const indiaFilingsHtml = await fetchHtml(
-      `https://www.indiafilings.com/search/${qorpiqData.slug}-cin-${normalizedCin}`
+      `https://www.indiafilings.com/search/${slug}-cin-${normalizedCin}`
     );
     if (indiaFilingsHtml) {
       indiaFilingsData = parseIndiaFilingsPage(indiaFilingsHtml, normalizedCin);
     }
   }
 
-  return mergeRegistryData(normalizedCin, [qorpiqData, indiaFilingsData]);
+  return mergeRegistryData(normalizedCin, [qorpiqEmbedded, qorpiqData, indiaFilingsData]);
 }
