@@ -1,0 +1,93 @@
+export interface CompanySearchResult {
+  cin: string;
+  name: string;
+  status: string;
+  type: string;
+  state: string;
+  dateOfIncorporation: string;
+  registeredOffice: string;
+  listingStatus: string;
+}
+
+export interface Director {
+  din: string;
+  name: string;
+  designation: string;
+  appointmentDate: string;
+  cessationDate: string | null;
+  status: "Current" | "Resigned";
+}
+
+export interface Shareholder {
+  name: string;
+  holdingPercent: string | null;
+  shares: string | null;
+  source: string;
+}
+
+export interface WebEnrichment {
+  website: string | null;
+  revenue: string | null;
+  revenueYear: string | null;
+  description: string | null;
+  industry: string | null;
+  employees: string | null;
+  sources: string[];
+}
+
+export interface CompanyProfile {
+  cin: string;
+  name: string;
+  status: string;
+  type: string;
+  category: string;
+  subCategory: string;
+  listingStatus: string;
+  dateOfIncorporation: string;
+  ageYears: number;
+  roc: string;
+  state: string;
+  registeredOffice: {
+    address: string;
+    city: string;
+    state: string;
+    pincode: string;
+  };
+  authorizedCapitalInr: number;
+  paidUpCapitalInr: number;
+  lastAgmDate: string | null;
+  lastBalanceSheetDate: string | null;
+  email: string | null;
+  nicCode: string;
+  industry: string;
+  cinParsed: CinInfo;
+  directors: Director[];
+  shareholders: Shareholder[];
+  webEnrichment: WebEnrichment;
+  summary: string;
+  dataSources: string[];
+}
+
+export interface CinInfo {
+  listingStatus: string;
+  industryCode: string;
+  industryDescription: string;
+  stateCode: string;
+  stateName: string;
+  yearOfIncorporation: number;
+  companyType: string;
+  registrationNumber: string;
+}
+
+export interface CompareResponse {
+  companies: CompanyProfile[];
+  comparisonSummary: string;
+  comparedFields: ComparisonField[];
+}
+
+export interface ComparisonField {
+  label: string;
+  key: string;
+  values: (string | number | null)[];
+  highlight?: "max" | "min" | null;
+}
