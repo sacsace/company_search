@@ -29,7 +29,7 @@ cp .env.example .env.local
 `.env.local` 파일에 API 키를 입력:
 
 ```
-DATA_GOV_API_KEY=your_api_key_here
+DATA_GOV_API_KEY=<발급받은_API_키>
 ```
 
 ### 3. 개발 서버 실행

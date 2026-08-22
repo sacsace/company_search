@@ -9,7 +9,7 @@ import { searchCompaniesByWeb } from "./web-search";
 
 function hasDataGovApiKey(): boolean {
   const key = process.env.DATA_GOV_API_KEY;
-  return !!key && key !== "your_api_key_here";
+  return !!key && key !== "REPLACE_WITH_DATA_GOV_KEY";
 }
 
 function applyWebFields(
