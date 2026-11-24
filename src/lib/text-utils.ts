@@ -59,6 +59,15 @@ export function isReadableLatinText(text: string): boolean {
   return latin / nonSpace.length > 0.45;
 }
 
+/** 공식 사이트 소개 등 — 한글 사업 설명도 허용 */
+export function isUsableBusinessText(text: string): boolean {
+  const decoded = sanitizeWebText(text);
+  if (!decoded || decoded.replace(/\s/g, "").length < 12) return false;
+  if (isReadableLatinText(decoded)) return true;
+  const hangul = (decoded.match(/[가-힣]/g) ?? []).length;
+  return hangul >= 8;
+}
+
 export function isRelevantSearchResult(result: {
   title: string;
   url: string;

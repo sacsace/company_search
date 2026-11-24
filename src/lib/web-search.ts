@@ -212,6 +212,31 @@ async function lookupByCinOnTofler(cin: string): Promise<CompanySearchResult[]> 
   return results;
 }
 
+/** 브랜드·약칭 → 정식 법인명 후보 */
+const BRAND_ALIASES: Record<string, string[]> = {
+  "samsung india": [
+    "Samsung India Electronics Private Limited",
+    "Samsung India Electronics",
+    "Samsung R&D Institute India",
+  ],
+  samsung: ["Samsung India Electronics Private Limited", "Samsung India Electronics"],
+  "lg india": ["LG Electronics India Private Limited", "LG Soft India"],
+  "hyundai india": ["Hyundai Motor India Limited", "Hyundai Motor India"],
+  "msv": ["Minsub Ventures Private Limited", "Minsub Ventures"],
+  "minsub": ["Minsub Ventures Private Limited"],
+};
+
+function expandSearchQueries(query: string): string[] {
+  const trimmed = query.trim();
+  const key = trimmed.toLowerCase().replace(/\s+/g, " ");
+  const aliases = BRAND_ALIASES[key] ?? [];
+  const withIndia =
+    /\bindia\b/i.test(trimmed) || /[가-힣]/.test(trimmed)
+      ? []
+      : [`${trimmed} India`, `${trimmed} Private Limited India`];
+  return [...new Set([trimmed, ...aliases, ...withIndia])].slice(0, 5);
+}
+
 export async function searchCompaniesByWeb(
   query: string,
   limit = 20
@@ -231,30 +256,40 @@ export async function searchCompaniesByWeb(
     }
   }
 
-  const searchFns = [
-    { fn: () => searchYahoo(trimmed), source: "Yahoo Search" },
-    { fn: () => searchBrave(trimmed), source: "Brave Search" },
-    { fn: () => searchZaubaCorp(trimmed), source: "ZaubaCorp" },
-    { fn: () => searchDuckDuckGo(trimmed), source: "DuckDuckGo" },
-  ];
+  const queries = expandSearchQueries(trimmed);
 
-  for (const { fn, source } of searchFns) {
-    const results = await fn();
-    if (results.length > 0) {
-      sources.push(source);
-      for (const r of results) {
-        const acceptPlaceholder = cinOnly && r.cin.toUpperCase() === trimmed.toUpperCase();
-        if (!seen.has(r.cin) && (scoreMatch(r.name, trimmed) >= 15 || acceptPlaceholder)) {
-          seen.add(r.cin);
-          allResults.push(r);
+  for (const q of queries) {
+    const searchFns = [
+      { fn: () => searchYahoo(q), source: "Yahoo Search" },
+      { fn: () => searchBrave(q), source: "Brave Search" },
+      { fn: () => searchZaubaCorp(q), source: "ZaubaCorp" },
+      { fn: () => searchDuckDuckGo(q), source: "DuckDuckGo" },
+    ];
+
+    for (const { fn, source } of searchFns) {
+      const results = await fn();
+      if (results.length > 0) {
+        if (!sources.includes(source)) sources.push(source);
+        for (const r of results) {
+          const acceptPlaceholder = cinOnly && r.cin.toUpperCase() === trimmed.toUpperCase();
+          const score = Math.max(scoreMatch(r.name, trimmed), scoreMatch(r.name, q));
+          if (!seen.has(r.cin) && (score >= 12 || acceptPlaceholder)) {
+            seen.add(r.cin);
+            allResults.push(r);
+          }
         }
       }
+      if (allResults.length >= limit) break;
     }
-    if (allResults.length >= limit) break;
+    if (allResults.length >= Math.min(5, limit)) break;
   }
 
   const sorted = allResults
-    .sort((a, b) => scoreMatch(b.name, trimmed) - scoreMatch(a.name, trimmed))
+    .sort(
+      (a, b) =>
+        Math.max(scoreMatch(b.name, trimmed), ...queries.map((q) => scoreMatch(b.name, q))) -
+        Math.max(scoreMatch(a.name, trimmed), ...queries.map((q) => scoreMatch(a.name, q)))
+    )
     .slice(0, limit);
 
   return {

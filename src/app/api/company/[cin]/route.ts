@@ -3,10 +3,12 @@ import { isValidCin } from "@/lib/cin-parser";
 import { buildCompanyProfile } from "@/lib/company-service";
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ cin: string }> }
 ) {
   const { cin } = await params;
+  const modeParam = request.nextUrl.searchParams.get("mode");
+  const mode = modeParam === "deep" ? "deep" : "standard";
 
   if (!cin) {
     return NextResponse.json({ error: "CIN이 필요합니다." }, { status: 400 });
@@ -17,7 +19,7 @@ export async function GET(
   }
 
   try {
-    const profile = await buildCompanyProfile(cin);
+    const profile = await buildCompanyProfile(cin, { mode });
     return NextResponse.json(profile);
   } catch (error) {
     console.error("Company fetch error:", error);

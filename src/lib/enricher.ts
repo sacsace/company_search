@@ -6,7 +6,7 @@ import { fetchWebsiteReviews, fetchSnsComments, fetchWebReviewSnippets, comments
 import { parseBusinessActivity, parseDirectorsFromText } from "./registry-scraper";
 import { buildGoogleSearchUrl, searchWeb, type WebSearchResult } from "./search-engine";
 import { isSafeOutboundUrl } from "./security-utils";
-import { hasCjkText, isForeignSiteUrl, isReadableLatinText, isRelevantSearchResult, isUsefulCommentText, sanitizeWebText } from "./text-utils";
+import { hasCjkText, isForeignSiteUrl, isReadableLatinText, isRelevantSearchResult, isUsableBusinessText, isUsefulCommentText, sanitizeWebText } from "./text-utils";
 
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
@@ -234,6 +234,27 @@ function extractListItems(text: string, keywords: string[]): string[] {
     }
   }
   return [...new Set(items)].slice(0, 8);
+}
+
+/** 문장 단위로 잘라 사업·서비스 소개가 중간에서 끊기지 않게 정리 */
+function summarizeOfferingLines(text: string, keywords: string[]): string[] {
+  const sentences: string[] = [];
+  for (const kw of keywords) {
+    const section = text.match(
+      new RegExp(`${kw}[:\\s]+([A-Za-z0-9][\\s\\S]{30,420}?(?:\\.|\\n|$))`, "i")
+    );
+    if (!section?.[1]) continue;
+    const chunk = section[1].replace(/\s+/g, " ").trim();
+    const parts = chunk
+      .split(/(?<=[.!?])\s+/)
+      .map((s) => s.trim())
+      .filter((s) => s.length >= 24 && s.length <= 220 && /[A-Za-z]{4,}/.test(s));
+    sentences.push(...parts.slice(0, 2));
+  }
+  if (sentences.length === 0) {
+    return extractListItems(text, keywords);
+  }
+  return [...new Set(sentences)].slice(0, 5);
 }
 
 function extractRevenue(text: string): { revenue: string | null; year: string | null } {
@@ -616,8 +637,11 @@ export async function enrichFromWeb(
   registryDescription: string | null = null,
   registryBusinessActivity: string | null = null,
   registryEmail: string | null = null,
-  registryAddress: string | null = null
+  registryAddress: string | null = null,
+  options: { mode?: "standard" | "deep" } = {}
 ): Promise<WebEnrichment> {
+  const mode = options.mode ?? "standard";
+  const deepSearchNotes: string[] = [];
   const sources: string[] = [];
   const relatedLinks: WebLink[] = [...registryLinks];
   const insights: WebInsight[] = [];
@@ -649,6 +673,8 @@ export async function enrichFromWeb(
     relationResults,
     newsResults,
     koreanResults,
+    creditResults,
+    customerResults,
   ] = await Promise.all([
     searchWeb(`"${companyName}" ${cin} India company revenue employees founded`, 6),
     searchWeb(`"${companyName}" site:linkedin.com/company India`, 4),
@@ -671,6 +697,14 @@ export async function enrichFromWeb(
       : shortName
         ? searchWeb(`"${shortName}" 인도 법인 OR 인도 공장 OR 인도 진출`, 3)
         : Promise.resolve([]),
+    searchWeb(
+      `"${companyName}" OR "${shortName}" (CRISIL OR ICRA OR CARE Ratings OR rating rationale) India`,
+      5
+    ),
+    searchWeb(
+      `"${companyName}" OR "${shortName}" (client OR customer OR case study OR project OR awarded OR contract) India`,
+      5
+    ),
   ]);
 
   for (const result of mainResults) {
@@ -689,6 +723,8 @@ export async function enrichFromWeb(
     ...relationResults,
     ...newsResults,
     ...koreanResults,
+    ...creditResults,
+    ...customerResults,
   ];
 
   for (const result of expandedBuckets) {
@@ -711,6 +747,8 @@ export async function enrichFromWeb(
   const newsItems = toSnippets(newsResults).slice(0, 6);
   const indiaOpsSnippets = toSnippets([...indiaResults, ...koreanResults]).slice(0, 6);
   const relationSnippets = toSnippets(relationResults).slice(0, 6);
+  const creditRatingSnippets = toSnippets(creditResults).slice(0, 5);
+  const customerSnippets = toSnippets(customerResults).slice(0, 5);
   const riskSnippets = toSnippets(
     [...newsResults, ...mainResults].filter((result) =>
       /lawsuit|dispute|sanction|fraud|strike|closure|shutdown|폐업|분쟁|제재|소송/i.test(
@@ -753,6 +791,8 @@ export async function enrichFromWeb(
     ...relationResults,
     ...newsResults,
     ...koreanResults,
+    ...creditResults,
+    ...customerResults,
   ];
   let website: string | null =
     (await resolveCompanyWebsite(companyName, cin, allSearchResults, registryEmail)) ??
@@ -794,21 +834,33 @@ export async function enrichFromWeb(
 
   const employeesMatch = extractEmployees(combinedText);
   const foundedDate = extractFoundedDate(combinedText);
-  const businessDescriptionRaw =
-    (registryBusinessActivity && isReadableLatinText(registryBusinessActivity)
-      ? registryBusinessActivity.trim()
+  // 등기 업종(registryBusinessActivity/NIC)은 현재 영위 사업과 분리한다.
+  // 공식 사이트 소개(한글 포함)를 우선하고, 등기 디렉터리 업종 문구는 넣지 않는다.
+  const websiteIntro =
+    description && website && isUsableBusinessText(description) ? description.trim() : null;
+  const actualBusinessRaw =
+    websiteIntro ||
+    extractBusinessDescription(websiteData.text || combinedText, companyName, rawSnippets) ||
+    (registryDescription &&
+    !isRegistryBoilerplate(registryDescription) &&
+    isUsableBusinessText(registryDescription)
+      ? registryDescription.trim()
       : null) ||
-    (registryDescription && !isRegistryBoilerplate(registryDescription) ? registryDescription.trim() : null) ||
-    parseBusinessActivity(combinedText) ||
-    extractBusinessDescription(combinedText, companyName, rawSnippets) ||
-    description ||
-    industryMatch?.[1]?.trim() ||
+    parseBusinessActivity(websiteData.text || "") ||
     null;
   const businessDescription =
-    businessDescriptionRaw && isReadableLatinText(businessDescriptionRaw) ? businessDescriptionRaw : null;
+    actualBusinessRaw && isUsableBusinessText(actualBusinessRaw)
+      ? actualBusinessRaw.replace(/\s+/g, " ").trim().slice(0, 420)
+      : null;
 
-  const products = extractListItems(combinedText, ["products", "product range", "our products"]);
-  const services = extractListItems(combinedText, ["services", "our services", "solutions", "offerings"]);
+  const products = summarizeOfferingLines(combinedText, ["products", "product range", "our products"]);
+  const services = summarizeOfferingLines(combinedText, [
+    "services",
+    "our services",
+    "solutions",
+    "offerings",
+    "what we do",
+  ]);
 
   const addressMatch = combinedText.match(
     /(?:address|registered office|head\s*office|location)[:\s]+([A-Za-z0-9\s,.#/-]{15,150}?(?:India|IN-\d{6}|\d{6}))/i
@@ -872,11 +924,6 @@ export async function enrichFromWeb(
 
   const uniqueSocial = allSocialLinks.filter(
     (link, i, arr) => arr.findIndex((l) => l.url === link.url) === i
-  );
-
-  const uniqueLinks = relatedLinks.filter(
-    (link, i, arr) =>
-      arr.findIndex((l) => l.url === link.url) === i && !isForeignSiteUrl(link.url)
   );
 
   const snsComments: WebEnrichment["snsComments"] = [];
@@ -961,15 +1008,111 @@ export async function enrichFromWeb(
     ...glassdoorData.reviews.slice(0, 5),
   ];
 
+  const reviewSearchStatus: WebEnrichment["reviewSearchStatus"] = [
+    {
+      platform: "AmbitionBox",
+      status:
+        ambitionBoxData.companyRating !== null || ambitionBoxData.reviews.length > 0
+          ? "found"
+          : ambitionBoxData.pageUrl
+            ? "not_found"
+            : "blocked",
+      detail:
+        ambitionBoxData.companyRating !== null
+          ? `평점 ${ambitionBoxData.companyRating}`
+          : ambitionBoxData.pageUrl
+            ? "페이지는 찾았으나 리뷰 없음"
+            : "검색·접근 실패 또는 결과 없음",
+    },
+    {
+      platform: "Glassdoor",
+      status:
+        glassdoorData.rating !== null || glassdoorData.reviews.length > 0 || glassdoorData.snippets.length > 0
+          ? "found"
+          : "not_found",
+      detail:
+        glassdoorData.rating !== null
+          ? `평점 ${glassdoorData.rating}`
+          : glassdoorData.snippets.length > 0
+            ? `스니펫 ${glassdoorData.snippets.length}건`
+            : "검색했으나 확인된 리뷰 없음",
+    },
+    {
+      platform: "Google Maps",
+      status: googleMapsData?.rating != null ? "found" : "not_found",
+      detail:
+        googleMapsData?.rating != null
+          ? `평점 ${googleMapsData.rating}`
+          : "검색했으나 사업장 평점 미확인",
+    },
+  ];
+
+  // 심층 모드: 비어 있는 핵심 항목만 후속 검색
+  if (mode === "deep") {
+    const followUps: Promise<Awaited<ReturnType<typeof searchWeb>>>[] = [];
+    if (!revenue) {
+      followUps.push(searchWeb(`"${companyName}" OR "${shortName}" turnover OR revenue OR FY India`, 4));
+      deepSearchNotes.push("매출 후속 검색 실행");
+    }
+    if (!employeesMatch) {
+      followUps.push(searchWeb(`"${companyName}" OR "${shortName}" employees OR headcount OR "team size" India`, 4));
+      deepSearchNotes.push("직원 수 후속 검색 실행");
+    }
+    if (creditRatingSnippets.length === 0) {
+      followUps.push(searchWeb(`"${shortName}" site:crisilratings.com OR site:icra.in rating`, 4));
+      deepSearchNotes.push("신용평가 후속 검색 실행");
+    }
+    if (employeeReviews.length === 0) {
+      followUps.push(searchWeb(`"${companyName}" site:ambitionbox.com OR site:glassdoor.co.in review`, 4));
+      deepSearchNotes.push("직원 평가 후속 검색 실행");
+    }
+    if (followUps.length > 0) {
+      const followResults = (await Promise.all(followUps)).flat();
+      for (const result of followResults) {
+        if (isBlacklisted(result.url) || !isRelevantSearchResult(result)) continue;
+        combinedText += " " + result.snippet;
+        rawSnippets.push({ text: result.snippet, source: result.title, url: result.url });
+        relatedLinks.push({ label: result.title, url: result.url, type: "source" });
+      }
+      if (!revenue) {
+        const retryRevenue = extractRevenue(combinedText);
+        if (retryRevenue.revenue) {
+          deepSearchNotes.push(`매출 후보 확보: ${retryRevenue.revenue}`);
+        } else {
+          deepSearchNotes.push("매출은 여전히 미확인");
+        }
+      }
+      if (employeeReviews.length === 0) {
+        deepSearchNotes.push(
+          followResults.some((r) => /ambitionbox|glassdoor/i.test(r.url))
+            ? "직원 평가 관련 출처 추가"
+            : "직원 평가는 여전히 미확인"
+        );
+      }
+      deepSearchNotes.push(`새 출처 후보 ${followResults.length}건 수집`);
+    } else {
+      deepSearchNotes.push("추가 조사가 필요한 핵심 공란이 없어 후속 검색을 생략");
+    }
+  }
+
+  const retryRevenue = extractRevenue(combinedText);
+  const finalRevenue = revenue ?? retryRevenue.revenue;
+  const finalYear = year ?? retryRevenue.year;
+  const retryEmployees = extractEmployees(combinedText);
+  const uniqueLinks = relatedLinks.filter(
+    (link, i, arr) =>
+      arr.findIndex((l) => l.url === link.url) === i && !isForeignSiteUrl(link.url)
+  );
+
   return {
     website,
-    revenue,
-    revenueYear: year,
+    revenue: finalRevenue,
+    revenueYear: finalYear,
     description: description?.substring(0, 500) ?? businessDescription?.substring(0, 500) ?? null,
     businessDescription: businessDescription?.substring(0, 500) ?? null,
     foundedDate,
-    industry: industryMatch?.[1]?.trim() ?? null,
-    employees: employeesMatch ? `${employeesMatch}명` : null,
+    industry: registryBusinessActivity || industryMatch?.[1]?.trim() || null,
+    employees: employeesMatch || retryEmployees ? `${employeesMatch || retryEmployees}명` : null,
     phone: websiteData.phones[0] ?? null,
     email: websiteData.emails[0] ?? null,
     address: addressMatch?.[1]?.trim() ?? null,
@@ -1002,6 +1145,10 @@ export async function enrichFromWeb(
     indiaOpsSnippets,
     relationSnippets,
     riskSnippets,
+    creditRatingSnippets,
+    customerSnippets,
+    reviewSearchStatus,
+    deepSearchNotes,
   };
 }
 

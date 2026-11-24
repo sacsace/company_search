@@ -27,6 +27,23 @@ export interface RegistryCompanyData {
   sources: string[];
 }
 
+export function isValidChargesSummary(value: string | null | undefined): boolean {
+  const text = value?.replace(/\s+/g, " ").trim() || "";
+  if (!text) return false;
+  if (/no registered charges|등록된 담보\(Charges\) 없음/i.test(text)) return true;
+  if (
+    /charges?\s+network|menu|login|sign\s*up|subscribe|cookie|privacy|download app|charge\s*holder\s*amount\s*date|date of creation\/modification/i.test(
+      text
+    )
+  ) {
+    return false;
+  }
+  if (text.length < 12 || text.length > 180) return false;
+  // 테이블 헤더만 잡힌 경우 제외
+  if (/^charge holder/i.test(text) && !/(₹|rs\.?|inr)\s*[\d,]+/i.test(text)) return false;
+  return /(₹|rs\.?|inr)\s*[\d,.]+|(?:open|satisfied)\s+charge|secured\s+by/i.test(text);
+}
+
 async function fetchHtml(url: string): Promise<string | null> {
   if (!isSafeOutboundUrl(url)) return null;
   try {
@@ -261,9 +278,12 @@ function parseToflerPage(html: string, cin: string): Partial<RegistryCompanyData
         .join(" ")
     : undefined;
 
-  const chargesSummary = /no registered charges/i.test(text)
+  const chargesRaw = /no registered charges/i.test(text)
     ? "등록된 담보(Charges) 없음"
-    : text.match(/charges?[^\n.]{0,80}/i)?.[0]?.trim();
+    : text.match(
+        /(?:no registered charges|(?:open|satisfied)\s+charges?[^\n.]{0,100}|(?:₹|Rs\.?|INR)\s*[\d,.]+[^\n.]{0,60}(?:charge|secured))/i
+      )?.[0]?.trim();
+  const chargesSummary = isValidChargesSummary(chargesRaw) ? chargesRaw : undefined;
 
   const connectedCompanies: ConnectedCompany[] = [];
   const seenConnected = new Set<string>();
@@ -280,6 +300,7 @@ function parseToflerPage(html: string, cin: string): Partial<RegistryCompanyData
         .join(" "),
       cin: connectedCin,
       url: `https://www.tofler.in/${match[1]}/company/${connectedCin}`,
+      relationType: "common-director",
     });
     if (connectedCompanies.length >= 8) break;
   }

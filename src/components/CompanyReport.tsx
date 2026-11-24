@@ -1,8 +1,10 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { CompanyProfile, FactConfidence, ReportFact } from "@/lib/types";
 import { buildCompanyReport } from "@/lib/company-report";
+
+type DetailTab = "business" | "relations" | "news" | "contact" | "reviews";
 
 const CONFIDENCE_LABEL: Record<FactConfidence, string> = {
   confirmed: "확인됨",
@@ -22,6 +24,7 @@ const SCOPE_LABEL: Record<ReportFact["entityScope"], string> = {
   "india-entity": "인도 법인",
   parent: "모회사",
   group: "그룹",
+  "shared-director": "공통 이사",
   unknown: "법인 미확정",
 };
 
@@ -69,13 +72,34 @@ function FactRow({ item }: { item: ReportFact }) {
 interface Props {
   profile: CompanyProfile;
   onClose: () => void;
-  onResearch?: () => void;
+  onRefresh?: () => void;
+  onDeepSearch?: () => void;
   researching?: boolean;
+  /** @deprecated use onDeepSearch */
+  onResearch?: () => void;
+  focusTab?: DetailTab;
+  reviewsOnly?: boolean;
+  hideInternalNav?: boolean;
 }
 
-export function CompanyReport({ profile, onClose, onResearch, researching }: Props) {
+export function CompanyReport({
+  profile,
+  onClose,
+  onRefresh,
+  onDeepSearch,
+  researching,
+  onResearch,
+  focusTab = "business",
+  reviewsOnly = false,
+  hideInternalNav = false,
+}: Props) {
   const report = useMemo(() => buildCompanyReport(profile), [profile]);
-  const [activeTab, setActiveTab] = useState<"business" | "relations" | "news" | "contact" | "reviews">("business");
+  const [activeTab, setActiveTab] = useState<DetailTab>(focusTab);
+  const deepHandler = onDeepSearch || onResearch;
+
+  useEffect(() => {
+    setActiveTab(focusTab);
+  }, [focusTab]);
 
   const cardSections = report.sections.filter((section) =>
     ["overview", "products", "india", "scale"].includes(section.id)
@@ -148,18 +172,29 @@ export function CompanyReport({ profile, onClose, onResearch, researching }: Pro
             </a>
           )}
           <p className="mt-2 text-[11px] text-neutral-400">
-            마지막 검색: {new Date(report.generatedAt).toLocaleString("ko-KR")}
+            조사 시각: {new Date(report.generatedAt).toLocaleString("ko-KR")}
+            {report.freshness.lastAgmDate ? ` · AGM ${report.freshness.lastAgmDate}` : ""}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          {onResearch && (
+          {onRefresh && (
             <button
               type="button"
-              onClick={onResearch}
+              onClick={onRefresh}
               disabled={researching}
               className="rounded border border-neutral-300 px-3 py-1.5 text-xs font-semibold text-neutral-700 hover:bg-neutral-50 disabled:opacity-50"
             >
-              {researching ? "심층 검색 중..." : "심층·다시 검색"}
+              {researching ? "갱신 중..." : "최신 정보 갱신"}
+            </button>
+          )}
+          {deepHandler && (
+            <button
+              type="button"
+              onClick={deepHandler}
+              disabled={researching}
+              className="rounded border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-neutral-800 disabled:opacity-50"
+            >
+              {researching ? "심층 조사 중..." : "심층 조사"}
             </button>
           )}
           <button
@@ -179,6 +214,7 @@ export function CompanyReport({ profile, onClose, onResearch, researching }: Pro
         </div>
       </div>
 
+      {!reviewsOnly && (
       <div className="rounded border border-neutral-200 bg-neutral-50 p-4">
         <p className="text-[11px] font-bold uppercase tracking-wide text-neutral-400">핵심 요약</p>
         <ul className="mt-2 space-y-1.5">
@@ -189,53 +225,113 @@ export function CompanyReport({ profile, onClose, onResearch, researching }: Pro
           ))}
         </ul>
       </div>
+      )}
 
-      <div className="grid gap-3 sm:grid-cols-2">
-        {cardSections.map((section) => {
-          const topFacts = section.facts.filter((f) => f.confidence !== "missing").slice(0, 2);
-          const display = topFacts.length > 0 ? topFacts : section.facts.slice(0, 1);
-          return (
-            <div key={section.id} className="rounded border border-neutral-200 p-3">
-              <p className="text-[11px] font-bold uppercase tracking-wide text-neutral-400">{section.title}</p>
-              {display.map((item) => (
-                <div key={item.label} className="mt-2">
-                  <p className="text-[11px] font-semibold text-neutral-500">{item.label}</p>
-                  <p className="mt-0.5 line-clamp-3 text-sm font-semibold text-neutral-800">{item.value}</p>
-                </div>
-              ))}
+      {!reviewsOnly && (
+        <>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="rounded border border-neutral-200 p-3">
+              <p className="text-[11px] font-bold uppercase tracking-wide text-neutral-400">평가 요약</p>
+              <p className="mt-1 text-[11px] font-semibold text-neutral-500">
+                근거 충분성:{" "}
+                {report.assessment.evidenceLevel === "high"
+                  ? "높음"
+                  : report.assessment.evidenceLevel === "medium"
+                    ? "보통"
+                    : "낮음"}{" "}
+                (점수 아님)
+              </p>
+              <div className="mt-2 space-y-2 text-xs leading-relaxed text-neutral-700">
+                <p className="whitespace-pre-line">
+                  <span className="font-bold text-emerald-700">강점</span>
+                  {"\n"}
+                  {report.assessment.strengths.length
+                    ? report.assessment.strengths.map((item) => `· ${item}`).join("\n")
+                    : "· 확인된 강점 없음"}
+                </p>
+                <p className="whitespace-pre-line">
+                  <span className="font-bold text-amber-700">주의사항</span>
+                  {"\n"}
+                  {report.assessment.cautions.length
+                    ? report.assessment.cautions.map((item) => `· ${item}`).join("\n")
+                    : "· 확인된 주의사항 없음"}
+                </p>
+                <p className="whitespace-pre-line">
+                  <span className="font-bold text-neutral-600">판단 보류</span>
+                  {"\n"}
+                  {report.assessment.deferred.length
+                    ? report.assessment.deferred.map((item) => `· ${item}`).join("\n")
+                    : "· 해당 없음"}
+                </p>
+              </div>
             </div>
-          );
-        })}
-      </div>
+            <div className="rounded border border-neutral-200 p-3">
+              <p className="text-[11px] font-bold uppercase tracking-wide text-neutral-400">정보 신뢰도</p>
+              <ul className="mt-2 space-y-1.5 text-xs text-neutral-700">
+                {report.freshness.notes.map((note) => (
+                  <li key={note}>· {note}</li>
+                ))}
+                <li>· 출처 {report.sources.length}건 · 확인됨/추정/충돌/미확인을 항목별로 표시</li>
+                {report.assessment.followUps.slice(0, 3).map((item) => (
+                  <li key={item}>· 추가 확인: {item}</li>
+                ))}
+                {profile.webEnrichment.deepSearchNotes?.slice(0, 3).map((note) => (
+                  <li key={note}>· {note}</li>
+                ))}
+              </ul>
+            </div>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            {cardSections.map((section) => {
+              const topFacts = section.facts.filter((f) => f.confidence !== "missing").slice(0, 2);
+              const display = topFacts.length > 0 ? topFacts : section.facts.slice(0, 1);
+              return (
+                <div key={section.id} className="rounded border border-neutral-200 p-3">
+                  <p className="text-[11px] font-bold uppercase tracking-wide text-neutral-400">{section.title}</p>
+                  {display.map((item) => (
+                    <div key={item.label} className="mt-2">
+                      <p className="text-[11px] font-semibold text-neutral-500">{item.label}</p>
+                      <p className="mt-0.5 line-clamp-3 text-sm font-semibold text-neutral-800">{item.value}</p>
+                    </div>
+                  ))}
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
 
       <div>
-        <div className="flex flex-wrap gap-2 border-b border-neutral-200 pb-2">
-          {(
-            [
-              ["business", "사업 현황"],
-              ["relations", "관계사·인물"],
-              ["news", "최근 소식"],
-              ["contact", "연락처"],
-              ["reviews", "온라인 평가"],
-            ] as const
-          ).map(([id, label]) => (
-            <button
-              key={id}
-              type="button"
-              onClick={() => setActiveTab(id)}
-              className={`rounded px-3 py-1.5 text-xs font-semibold ${
-                activeTab === id
-                  ? "bg-neutral-900 text-white"
-                  : "border border-neutral-200 text-neutral-600 hover:bg-neutral-50"
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+        {!hideInternalNav && !reviewsOnly && (
+          <div className="flex flex-wrap gap-2 border-b border-neutral-200 pb-2">
+            {(
+              [
+                ["business", "사업 현황"],
+                ["relations", "관계사·인물"],
+                ["news", "최근 소식"],
+                ["contact", "연락처"],
+              ] as const
+            ).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setActiveTab(id)}
+                className={`rounded px-3 py-1.5 text-xs font-semibold ${
+                  activeTab === id
+                    ? "bg-neutral-900 text-white"
+                    : "border border-neutral-200 text-neutral-600 hover:bg-neutral-50"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
 
         <div className="mt-3">
-          {activeTab !== "reviews" &&
+          {!reviewsOnly &&
+            activeTab !== "reviews" &&
             detailMap[activeTab].map((section) => (
               <div key={section.id} className="mb-4">
                 <h3 className="text-sm font-bold text-neutral-800">{section.title}</h3>
@@ -245,36 +341,75 @@ export function CompanyReport({ profile, onClose, onResearch, researching }: Pro
               </div>
             ))}
 
-          {activeTab === "reviews" && (
+          {(reviewsOnly || activeTab === "reviews") && (
             <div className="space-y-3">
+              {reviewsOnly && (
+                <h3 className="text-sm font-bold text-neutral-800">댓글 및 평가</h3>
+              )}
+              <div className="rounded border border-neutral-100 bg-neutral-50 p-3">
+                <p className="text-[11px] font-bold uppercase tracking-wide text-neutral-400">
+                  플랫폼 검색 결과
+                </p>
+                <ul className="mt-2 space-y-1 text-xs text-neutral-700">
+                  {(report.reviews.searchStatus.length
+                    ? report.reviews.searchStatus
+                    : [
+                        { platform: "AmbitionBox", status: "not_found" as const, detail: "상태 미기록" },
+                        { platform: "Glassdoor", status: "not_found" as const, detail: "상태 미기록" },
+                        { platform: "Google Maps", status: "not_found" as const, detail: "상태 미기록" },
+                      ]
+                  ).map((item) => (
+                    <li key={item.platform}>
+                      · {item.platform}:{" "}
+                      {item.status === "found"
+                        ? "수집됨"
+                        : item.status === "blocked"
+                          ? "접근 제한"
+                          : item.status === "error"
+                            ? "오류"
+                            : "검색했으나 확인 불가"}
+                      {item.detail ? ` — ${item.detail}` : ""}
+                    </li>
+                  ))}
+                </ul>
+                <p className="mt-2 text-[11px] text-neutral-500">
+                  직원 평가와 고객·사업장 평가는 별도로 표시하며, 리뷰 내용은 작성자 의견입니다.
+                </p>
+              </div>
+
               <div className="flex flex-wrap gap-3 text-xs font-semibold text-neutral-600">
                 {report.reviews.ambitionBoxRating !== null && (
                   <span>
-                    AmbitionBox {report.reviews.ambitionBoxRating.toFixed(1)}
+                    직원 · AmbitionBox {report.reviews.ambitionBoxRating.toFixed(1)}
                     {report.reviews.ambitionBoxReviewCount
                       ? ` (${report.reviews.ambitionBoxReviewCount}건)`
                       : ""}
                   </span>
                 )}
-                {report.reviews.googleMapsRating !== null && (
-                  <span>Google Maps {report.reviews.googleMapsRating.toFixed(1)}</span>
-                )}
                 {report.reviews.glassdoorRating !== null && (
-                  <span>Glassdoor {report.reviews.glassdoorRating.toFixed(1)}</span>
+                  <span>직원 · Glassdoor {report.reviews.glassdoorRating.toFixed(1)}</span>
                 )}
-                {report.reviews.ambitionBoxRating === null &&
-                  report.reviews.googleMapsRating === null &&
-                  report.reviews.glassdoorRating === null && <span>공개 평점 정보 없음</span>}
+                {report.reviews.googleMapsRating !== null && (
+                  <span>고객 · Google Maps {report.reviews.googleMapsRating.toFixed(1)}</span>
+                )}
               </div>
 
-              {report.reviews.employeeReviews.slice(0, 5).map((review, index) => {
+              {[...report.reviews.employeeReviews, ...report.reviews.websiteReviews.map((review) => ({
+                platform: review.source || "웹 리뷰",
+                rating: review.rating ? Number(review.rating) || null : null,
+                title: null as string | null,
+                jobProfile: null as string | null,
+                likes: review.text,
+                dislikes: null as string | null,
+                workDetails: null as string | null,
+              }))].slice(0, 12).map((review, index) => {
                 const body = [review.likes, review.dislikes, review.workDetails].filter(Boolean).join(" · ");
                 return (
                   <div key={`${review.platform}-${index}`} className="rounded border border-neutral-100 p-3">
                     <p className="text-[11px] font-semibold text-neutral-400">
                       {review.platform}
                       {review.rating !== null ? ` · ${review.rating}` : ""}
-                      {review.jobProfile ? ` · ${review.jobProfile}` : ""}
+                      {"jobProfile" in review && review.jobProfile ? ` · ${review.jobProfile}` : ""}
                     </p>
                     <p className="mt-1 text-sm text-neutral-800">{review.title || body || "리뷰"}</p>
                     {review.title && body && (
@@ -290,31 +425,48 @@ export function CompanyReport({ profile, onClose, onResearch, researching }: Pro
                 </p>
               ))}
 
+              {profile.webEnrichment.snsComments.slice(0, 8).map((comment, index) => (
+                <div key={`sns-${index}`} className="rounded border border-neutral-100 p-3">
+                  <p className="text-[11px] font-semibold text-neutral-400">
+                    {comment.platform}
+                    {comment.author ? ` · ${comment.author}` : ""}
+                    {comment.rating ? ` · ${comment.rating}` : ""}
+                  </p>
+                  <p className="mt-1 text-sm text-neutral-800">{comment.text}</p>
+                </div>
+              ))}
+
               {report.reviews.employeeReviews.length === 0 &&
-                report.reviews.glassdoorSnippets.length === 0 && (
-                  <p className="text-xs text-neutral-500">수집된 온라인 평가가 없습니다.</p>
+                report.reviews.websiteReviews.length === 0 &&
+                report.reviews.glassdoorSnippets.length === 0 &&
+                profile.webEnrichment.snsComments.length === 0 && (
+                  <p className="text-xs text-neutral-500">
+                    평가·댓글 원문은 수집되지 않았습니다. 위 플랫폼 검색 결과에서 접근·미확인 여부를 확인하세요.
+                  </p>
                 )}
             </div>
           )}
         </div>
       </div>
 
-      <div className="rounded border border-neutral-200 p-3">
-        <p className="text-[11px] font-bold uppercase tracking-wide text-neutral-400">출처 목록</p>
-        <ul className="mt-2 max-h-48 space-y-1 overflow-y-auto">
-          {report.sources.map((source) => (
-            <li key={`${source.label}-${source.url}`} className="text-xs text-neutral-600">
-              {source.url ? (
-                <a href={source.url} target="_blank" rel="noopener noreferrer" className="underline">
-                  {source.label}
-                </a>
-              ) : (
-                source.label
-              )}
-            </li>
-          ))}
-        </ul>
-      </div>
+      {!reviewsOnly && (
+        <div className="rounded border border-neutral-200 p-3">
+          <p className="text-[11px] font-bold uppercase tracking-wide text-neutral-400">출처 목록</p>
+          <ul className="mt-2 max-h-48 space-y-1 overflow-y-auto">
+            {report.sources.map((source) => (
+              <li key={`${source.label}-${source.url}`} className="text-xs text-neutral-600">
+                {source.url ? (
+                  <a href={source.url} target="_blank" rel="noopener noreferrer" className="underline">
+                    {source.label}
+                  </a>
+                ) : (
+                  source.label
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </section>
   );
 }

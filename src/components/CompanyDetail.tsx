@@ -382,7 +382,10 @@ export function CompanyDetail({ profile, onClose }: CompanyDetailProps) {
                     ) : (
                       company.name
                     )}{" "}
-                    <span className="text-neutral-500">({company.cin})</span>
+                    <span className="text-neutral-500">
+                      ({company.cin}
+                      {company.relationType === "common-director" ? " · 공통 이사" : ""})
+                    </span>
                   </li>
                 ))}
               </ul>

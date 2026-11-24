@@ -97,3 +97,138 @@ body {
     @apply w-full max-w-full;
   }
 }
+
+.collecting-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.25rem;
+  background: rgba(23, 23, 23, 0.42);
+  backdrop-filter: blur(2px);
+  animation: collecting-fade-in 0.2s ease-out;
+}
+
+.collecting-panel {
+  width: min(100%, 22rem);
+  border: 1px solid #e5e5e5;
+  background: #fff;
+  padding: 1.75rem 1.5rem 1.5rem;
+  text-align: center;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.14);
+  animation: collecting-rise 0.28s ease-out;
+}
+
+.collecting-orbit {
+  position: relative;
+  width: 4.5rem;
+  height: 4.5rem;
+  margin: 0 auto;
+}
+
+.collecting-core {
+  position: absolute;
+  inset: 1.35rem;
+  border-radius: 9999px;
+  background: #171717;
+  animation: collecting-pulse 1.4s ease-in-out infinite;
+}
+
+.collecting-dot {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0.55rem;
+  height: 0.55rem;
+  margin: -0.275rem;
+  border-radius: 9999px;
+  background: #525252;
+}
+
+.collecting-dot-a {
+  animation: collecting-orbit 1.6s linear infinite;
+}
+
+.collecting-dot-b {
+  animation: collecting-orbit 1.6s linear infinite;
+  animation-delay: -0.53s;
+  background: #737373;
+}
+
+.collecting-dot-c {
+  animation: collecting-orbit 1.6s linear infinite;
+  animation-delay: -1.06s;
+  background: #a3a3a3;
+}
+
+.collecting-message {
+  min-height: 2.5rem;
+  transition: opacity 0.25s ease;
+}
+
+.collecting-bar {
+  position: relative;
+  height: 3px;
+  overflow: hidden;
+  background: #f5f5f5;
+}
+
+.collecting-bar-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 40%;
+  background: #171717;
+  animation: collecting-bar 1.3s ease-in-out infinite;
+}
+
+@keyframes collecting-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes collecting-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes collecting-orbit {
+  from {
+    transform: rotate(0deg) translateX(1.7rem) rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg) translateX(1.7rem) rotate(-360deg);
+  }
+}
+
+@keyframes collecting-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(0.86);
+    opacity: 0.75;
+  }
+}
+
+@keyframes collecting-bar {
+  0% {
+    left: -40%;
+  }
+  100% {
+    left: 100%;
+  }
+}

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { SearchBar } from "@/components/SearchBar";
 import { SearchResults } from "@/components/SearchResults";
-import { CompanyReport } from "@/components/CompanyReport";
+import { CollectingOverlay, type CollectingMode } from "@/components/CollectingOverlay";
 import { CompareForm } from "@/components/CompareForm";
 import { ComparisonTable } from "@/components/ComparisonTable";
 import { RightsBanner } from "@/components/RightsBanner";
@@ -11,10 +11,8 @@ import type { CompanyProfile, CompanySearchResult, ComparisonField } from "@/lib
 
 export default function Home() {
   const [searchLoading, setSearchLoading] = useState(false);
-  const [detailLoading, setDetailLoading] = useState(false);
   const [compareLoading, setCompareLoading] = useState(false);
   const [results, setResults] = useState<CompanySearchResult[]>([]);
-  const [detailProfile, setDetailProfile] = useState<CompanyProfile | null>(null);
   const [compareFields, setCompareFields] = useState<ComparisonField[]>([]);
   const [compareSummary, setCompareSummary] = useState("");
   const [compareNames, setCompareNames] = useState<string[]>([]);
@@ -26,7 +24,6 @@ export default function Home() {
     setSearchLoading(true);
     setError(null);
     setMessage(null);
-    setDetailProfile(null);
     setResults([]);
     setActiveTab("search");
 
@@ -52,23 +49,6 @@ export default function Home() {
         setResults(data.results);
         if (data.results.length === 0) {
           setMessage("검색 결과가 없습니다. 회사명을 정확히 입력하거나 CIN 번호로 검색해보세요.");
-        } else if (data.results.length === 1) {
-          // 단일 매칭이면 바로 기업 요약 보고서 로드
-          const only = data.results[0] as CompanySearchResult;
-          setSearchLoading(false);
-          setDetailLoading(true);
-          try {
-            const detailRes = await fetch(`/api/company/${encodeURIComponent(only.cin)}`);
-            if (detailRes.ok) {
-              const profile = await detailRes.json();
-              setDetailProfile(profile);
-            }
-          } catch {
-            setError("기업 요약 보고서를 불러올 수 없습니다.");
-          } finally {
-            setDetailLoading(false);
-          }
-          return;
         }
       }
     } catch (err) {
@@ -79,22 +59,6 @@ export default function Home() {
       }
     } finally {
       setSearchLoading(false);
-    }
-  };
-
-  const handleViewDetail = async (cin: string) => {
-    setDetailLoading(true);
-    setError(null);
-
-    try {
-      const res = await fetch(`/api/company/${encodeURIComponent(cin)}`);
-      if (!res.ok) throw new Error("Failed");
-      const profile = await res.json();
-      setDetailProfile(profile);
-    } catch {
-      setError("상세 정보를 불러올 수 없습니다.");
-    } finally {
-      setDetailLoading(false);
     }
   };
 
@@ -130,8 +94,13 @@ export default function Home() {
     }
   };
 
+  const overlayOpen = searchLoading || compareLoading;
+  const overlayMode: CollectingMode = searchLoading ? "search" : "compare";
+
   return (
     <div className="app-shell min-h-screen w-full max-w-full">
+      <CollectingOverlay open={overlayOpen} mode={overlayMode} />
+
       <header className="app-header w-full border-b border-neutral-200 bg-white">
         <div className="page-container flex w-full max-w-full items-center justify-between py-4">
           <div>
@@ -171,12 +140,6 @@ export default function Home() {
           </div>
         </div>
 
-        {searchLoading && (
-          <p className="mt-4 rounded border border-neutral-200 bg-neutral-50 px-4 py-3 text-xs font-semibold text-neutral-600">
-            웹 검색 중입니다. 최대 1분 정도 걸릴 수 있습니다...
-          </p>
-        )}
-
         {error && (
           <p className="mt-4 rounded border border-red-200 bg-red-50 px-4 py-2 text-xs font-semibold text-red-700">
             {error}
@@ -193,28 +156,13 @@ export default function Home() {
             <div className="w-full max-w-full space-y-6">
               <SearchBar onSearch={handleSearch} loading={searchLoading} />
               <p className="text-[11px] font-semibold text-neutral-400">
-                회사명 또는 CIN으로 검색하면 웹·등기 정보를 모아 기업 요약 보고서를 만듭니다.
+                검색하면 매칭된 회사 목록만 표시됩니다. 전체 보기에서 요약 보고서와 댓글·평가를 확인하세요.
               </p>
               <p className="text-[11px] font-semibold text-neutral-400">
-                예: Minsub Ventures, Samsung India, 또는 U17226KA2020PTC133195 · 최초 요약 후 상세가 이어집니다.
+                예: Minsub Ventures, Samsung India, 또는 U17226KA2020PTC133195
               </p>
 
-              <SearchResults results={results} onViewDetail={handleViewDetail} />
-
-              {detailLoading && !detailProfile && (
-                <p className="py-12 text-center text-xs text-neutral-500">
-                  기업 요약 보고서를 작성하는 중... 웹·등기 정보를 수집하고 있습니다.
-                </p>
-              )}
-
-              {detailProfile && (
-                <CompanyReport
-                  profile={detailProfile}
-                  onClose={() => setDetailProfile(null)}
-                  researching={detailLoading}
-                  onResearch={() => handleViewDetail(detailProfile.cin)}
-                />
-              )}
+              <SearchResults results={results} />
             </div>
           )}
 

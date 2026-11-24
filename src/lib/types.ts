@@ -25,10 +25,18 @@ export interface Shareholder {
   source: string;
 }
 
+export type CompanyRelationType =
+  | "common-director"
+  | "equity"
+  | "parent-subsidiary"
+  | "trade"
+  | "unknown";
+
 export interface ConnectedCompany {
   name: string;
   cin: string;
   url: string | null;
+  relationType: CompanyRelationType;
 }
 
 export interface WebLink {
@@ -124,10 +132,20 @@ export interface WebEnrichment {
   indiaOpsSnippets: WebSnippet[];
   relationSnippets: WebSnippet[];
   riskSnippets: WebSnippet[];
+  creditRatingSnippets: WebSnippet[];
+  customerSnippets: WebSnippet[];
+  reviewSearchStatus: ReviewSearchStatus[];
+  deepSearchNotes: string[];
+}
+
+export interface ReviewSearchStatus {
+  platform: string;
+  status: "found" | "not_found" | "blocked" | "error";
+  detail: string | null;
 }
 
 export type FactConfidence = "confirmed" | "estimated" | "conflict" | "missing";
-export type EntityScope = "india-entity" | "parent" | "group" | "unknown";
+export type EntityScope = "india-entity" | "parent" | "group" | "shared-director" | "unknown";
 
 export interface ReportSource {
   label: string;
@@ -150,10 +168,28 @@ export interface ReportSection {
   facts: ReportFact[];
 }
 
+export interface ReportAssessment {
+  strengths: string[];
+  cautions: string[];
+  deferred: string[];
+  followUps: string[];
+  evidenceLevel: "high" | "medium" | "low";
+}
+
+export interface DataFreshness {
+  collectedAt: string;
+  lastAgmDate: string | null;
+  lastBalanceSheetDate: string | null;
+  agmFreshness: "recent" | "aging" | "stale" | "unknown";
+  notes: string[];
+}
+
 export interface CompanyReport {
   profile: CompanyProfile;
   generatedAt: string;
   headline: string[];
+  assessment: ReportAssessment;
+  freshness: DataFreshness;
   identity: {
     name: string;
     cin: string;
@@ -175,6 +211,7 @@ export interface CompanyReport {
     employeeReviews: EmployeeReview[];
     websiteReviews: WebsiteReview[];
     glassdoorSnippets: string[];
+    searchStatus: ReviewSearchStatus[];
   };
 }
 

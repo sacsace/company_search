@@ -2,7 +2,7 @@ import { parseCin } from "./cin-parser";
 import { enrichFromWeb, extractShareholdersFromText, isRegistryBoilerplate } from "./enricher";
 import { isConfiguredDataGovApiKey, searchCompaniesByName } from "./mca-data";
 import { isReadableLatinText } from "./text-utils";
-import { fetchRegistryByCin } from "./registry-scraper";
+import { fetchRegistryByCin, isValidChargesSummary } from "./registry-scraper";
 import { generateCompanySummary } from "./summary";
 import type { CompanyProfile, CompanySearchResult, Director, WebEnrichment } from "./types";
 import { searchCompaniesByWeb } from "./web-search";
@@ -39,10 +39,14 @@ function applyWebFields(
   }
 }
 
-export async function buildCompanyProfile(cin: string): Promise<CompanyProfile> {
+export async function buildCompanyProfile(
+  cin: string,
+  options: { mode?: "standard" | "deep" } = {}
+): Promise<CompanyProfile> {
   const normalizedCin = cin.toUpperCase().trim();
   const cinParsed = parseCin(normalizedCin);
   const dataSources: string[] = ["CIN Parser"];
+  const mode = options.mode ?? "standard";
 
   let baseData = {
     cin: normalizedCin,
@@ -114,7 +118,9 @@ export async function buildCompanyProfile(cin: string): Promise<CompanyProfile> 
       baseData.paidUpCapitalInr = registryData.paidUpCapitalInr;
     }
     if (registryData.lastAgmDate) baseData.lastAgmDate = registryData.lastAgmDate;
-    if (registryData.chargesSummary) baseData.chargesSummary = registryData.chargesSummary;
+    if (registryData.chargesSummary && isValidChargesSummary(registryData.chargesSummary)) {
+      baseData.chargesSummary = registryData.chargesSummary;
+    }
     if (registryData.listingStatus) baseData.listingStatus = registryData.listingStatus;
     if (registryData.businessActivity) baseData.industry = registryData.businessActivity;
     dataSources.push(...registryData.sources);
@@ -128,7 +134,8 @@ export async function buildCompanyProfile(cin: string): Promise<CompanyProfile> 
     registryData?.description ?? null,
     registryData?.businessActivity ?? null,
     registryData?.email ?? baseData.email,
-    registryData?.registeredAddress ?? baseData.registeredOffice.address ?? null
+    registryData?.registeredAddress ?? baseData.registeredOffice.address ?? null,
+    { mode }
   );
 
   if (registryData?.description) {
@@ -156,13 +163,19 @@ export async function buildCompanyProfile(cin: string): Promise<CompanyProfile> 
       (cinParsed ? String(cinParsed.yearOfIncorporation) : null);
   }
 
-  if (!webEnrichment.businessDescription && cinParsed?.industryDescription) {
-    webEnrichment.businessDescription = `${searchName} — ${cinParsed.industryDescription} (NIC ${cinParsed.industryCode})`;
+  // 등기 NIC/업종 코드는 industry에만 두고, 현재 영위 사업(businessDescription)과 섞지 않는다.
+  if (!baseData.industry && cinParsed?.industryDescription) {
+    baseData.industry = `${cinParsed.industryDescription} (NIC ${cinParsed.industryCode})`;
   }
 
   if (registryData?.businessActivity) {
     baseData.industry = registryData.businessActivity;
   }
+
+  const connectedCompanies = (registryData?.connectedCompanies ?? []).map((company) => ({
+    ...company,
+    relationType: company.relationType ?? ("common-director" as const),
+  }));
 
   applyWebFields(baseData, registryData, webEnrichment);
 
@@ -189,8 +202,6 @@ export async function buildCompanyProfile(cin: string): Promise<CompanyProfile> 
   if (webEnrichment.sources.length > 0) {
     dataSources.push(...webEnrichment.sources);
   }
-
-  const connectedCompanies = registryData?.connectedCompanies ?? [];
 
   const webText = [
     webEnrichment.description,
