@@ -62,6 +62,8 @@ export async function buildCompanyProfile(cin: string): Promise<CompanyProfile> 
     lastAgmDate: null as string | null,
     lastBalanceSheetDate: null as string | null,
     email: null as string | null,
+    phone: null as string | null,
+    chargesSummary: null as string | null,
     nicCode: cinParsed?.industryCode ?? "",
     industry: cinParsed?.industryDescription ?? "",
   };
@@ -82,21 +84,39 @@ export async function buildCompanyProfile(cin: string): Promise<CompanyProfile> 
   }
 
   if (registryData) {
-    if (!baseData.name) baseData.name = registryData.name;
-    if (registryData.status && baseData.status === "Unknown") baseData.status = registryData.status;
+    if (!baseData.name || baseData.name.startsWith("Company (")) {
+      baseData.name = registryData.name;
+    }
+    if (registryData.status && (baseData.status === "Unknown" || !baseData.status)) {
+      baseData.status = registryData.status;
+    }
     if (registryData.type && !baseData.type) baseData.type = registryData.type;
     if (registryData.roc) baseData.roc = registryData.roc;
     if (registryData.dateOfIncorporation) {
       baseData.dateOfIncorporation = registryData.dateOfIncorporation;
     }
     if (registryData.email) baseData.email = registryData.email;
-    if (registryData.registeredAddress) baseData.registeredOffice.address = registryData.registeredAddress;
+    if (registryData.registeredAddress) {
+      baseData.registeredOffice.address = registryData.registeredAddress;
+      const pin = registryData.registeredAddress.match(/\b(\d{6})\b/)?.[1];
+      if (pin) baseData.registeredOffice.pincode = pin;
+      if (/bangalore|bengaluru/i.test(registryData.registeredAddress)) {
+        baseData.registeredOffice.city = "Bengaluru";
+      }
+      if (/karnataka/i.test(registryData.registeredAddress)) {
+        baseData.registeredOffice.state = "Karnataka";
+      }
+    }
     if (registryData.authorizedCapitalInr) {
       baseData.authorizedCapitalInr = registryData.authorizedCapitalInr;
     }
     if (registryData.paidUpCapitalInr) {
       baseData.paidUpCapitalInr = registryData.paidUpCapitalInr;
     }
+    if (registryData.lastAgmDate) baseData.lastAgmDate = registryData.lastAgmDate;
+    if (registryData.chargesSummary) baseData.chargesSummary = registryData.chargesSummary;
+    if (registryData.listingStatus) baseData.listingStatus = registryData.listingStatus;
+    if (registryData.businessActivity) baseData.industry = registryData.businessActivity;
     dataSources.push(...registryData.sources);
   }
 
@@ -146,6 +166,17 @@ export async function buildCompanyProfile(cin: string): Promise<CompanyProfile> 
 
   applyWebFields(baseData, registryData, webEnrichment);
 
+  if (!baseData.email && webEnrichment.email) baseData.email = webEnrichment.email;
+  if (!baseData.phone && webEnrichment.phone) baseData.phone = webEnrichment.phone;
+  if (webEnrichment.email && !baseData.email) baseData.email = webEnrichment.email;
+
+  if (baseData.dateOfIncorporation) {
+    const yearMatch = baseData.dateOfIncorporation.match(/(19|20)\d{2}/);
+    if (yearMatch) {
+      baseData.ageYears = new Date().getFullYear() - parseInt(yearMatch[0], 10);
+    }
+  }
+
   const directors: Director[] = [...(registryData?.directors ?? [])];
   for (const director of webEnrichment.discoveredDirectors ?? []) {
     const exists = directors.some(
@@ -158,6 +189,8 @@ export async function buildCompanyProfile(cin: string): Promise<CompanyProfile> 
   if (webEnrichment.sources.length > 0) {
     dataSources.push(...webEnrichment.sources);
   }
+
+  const connectedCompanies = registryData?.connectedCompanies ?? [];
 
   const webText = [
     webEnrichment.description,
@@ -184,6 +217,7 @@ export async function buildCompanyProfile(cin: string): Promise<CompanyProfile> 
     },
     directors,
     shareholders,
+    connectedCompanies,
     webEnrichment,
     summary: "",
     dataSources: [...new Set(dataSources)],

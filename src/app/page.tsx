@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { SearchBar } from "@/components/SearchBar";
 import { SearchResults } from "@/components/SearchResults";
-import { CompanyDetail } from "@/components/CompanyDetail";
+import { CompanyReport } from "@/components/CompanyReport";
 import { CompareForm } from "@/components/CompareForm";
 import { ComparisonTable } from "@/components/ComparisonTable";
 import { RightsBanner } from "@/components/RightsBanner";
@@ -52,6 +52,23 @@ export default function Home() {
         setResults(data.results);
         if (data.results.length === 0) {
           setMessage("검색 결과가 없습니다. 회사명을 정확히 입력하거나 CIN 번호로 검색해보세요.");
+        } else if (data.results.length === 1) {
+          // 단일 매칭이면 바로 기업 요약 보고서 로드
+          const only = data.results[0] as CompanySearchResult;
+          setSearchLoading(false);
+          setDetailLoading(true);
+          try {
+            const detailRes = await fetch(`/api/company/${encodeURIComponent(only.cin)}`);
+            if (detailRes.ok) {
+              const profile = await detailRes.json();
+              setDetailProfile(profile);
+            }
+          } catch {
+            setError("기업 요약 보고서를 불러올 수 없습니다.");
+          } finally {
+            setDetailLoading(false);
+          }
+          return;
         }
       }
     } catch (err) {
@@ -176,20 +193,27 @@ export default function Home() {
             <div className="w-full max-w-full space-y-6">
               <SearchBar onSearch={handleSearch} loading={searchLoading} />
               <p className="text-[11px] font-semibold text-neutral-400">
-                예: Minsub Ventures, 또는 CIN 번호 (U17226KA2020PTC133195)
+                회사명 또는 CIN으로 검색하면 웹·등기 정보를 모아 기업 요약 보고서를 만듭니다.
               </p>
               <p className="text-[11px] font-semibold text-neutral-400">
-                검색어 입력 후 Enter 키 또는 검색 버튼을 눌러주세요. 결과까지 10~30초 걸릴 수 있습니다.
+                예: Minsub Ventures, Samsung India, 또는 U17226KA2020PTC133195 · 최초 요약 후 상세가 이어집니다.
               </p>
 
               <SearchResults results={results} onViewDetail={handleViewDetail} />
 
-              {detailLoading && (
-                <p className="py-12 text-center text-xs text-neutral-500">불러오는 중...</p>
+              {detailLoading && !detailProfile && (
+                <p className="py-12 text-center text-xs text-neutral-500">
+                  기업 요약 보고서를 작성하는 중... 웹·등기 정보를 수집하고 있습니다.
+                </p>
               )}
 
-              {detailProfile && !detailLoading && (
-                <CompanyDetail profile={detailProfile} onClose={() => setDetailProfile(null)} />
+              {detailProfile && (
+                <CompanyReport
+                  profile={detailProfile}
+                  onClose={() => setDetailProfile(null)}
+                  researching={detailLoading}
+                  onResearch={() => handleViewDetail(detailProfile.cin)}
+                />
               )}
             </div>
           )}

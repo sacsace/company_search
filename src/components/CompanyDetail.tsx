@@ -115,137 +115,210 @@ function formatWebsite(url: string): React.ReactNode {
   );
 }
 
-function EmployeeReviewsSection({ profile }: { profile: CompanyProfile }) {
+function formatReviewCount(count: number | null): string | null {
+  if (count === null) return null;
+  if (count >= 100000) return `${(count / 100000).toFixed(1).replace(/\.0$/, "")}L건`;
+  if (count >= 1000) return `${(count / 1000).toFixed(1).replace(/\.0$/, "")}K건`;
+  return `${count}건`;
+}
+
+type OnlineEvalItem = {
+  key: string;
+  platform: string;
+  rating: number | null;
+  title: string | null;
+  meta: string | null;
+  likes: string | null;
+  dislikes: string | null;
+  body: string | null;
+  subRatings: { name: string; rating: number }[];
+  url: string | null;
+};
+
+function buildOnlineEvalItems(profile: CompanyProfile): OnlineEvalItem[] {
   const web = profile.webEnrichment;
-  const reviews = web.employeeReviews;
+  const items: OnlineEvalItem[] = [];
+  const seen = new Set<string>();
 
-  if (reviews.length === 0) return null;
+  const pushUnique = (item: OnlineEvalItem) => {
+    const fingerprint = `${item.platform}|${item.title || ""}|${(item.likes || item.dislikes || item.body || "").slice(0, 80)}`;
+    if (seen.has(fingerprint)) return;
+    seen.add(fingerprint);
+    items.push(item);
+  };
 
-  const metaParts = [
-    web.ambitionBoxRating !== null ? `평균 ${web.ambitionBoxRating.toFixed(1)}점` : null,
-    web.ambitionBoxReviewCount !== null ? `${web.ambitionBoxReviewCount}건` : null,
+  for (const review of web.employeeReviews) {
+    pushUnique({
+      key: `emp-${review.platform}-${review.url}-${review.title}`,
+      platform: review.platform,
+      rating: review.rating,
+      title: review.title,
+      meta: [review.jobProfile, review.location, review.department, review.date].filter(Boolean).join(" · ") || null,
+      likes: review.likes,
+      dislikes: review.dislikes,
+      body: review.workDetails,
+      subRatings: review.subRatings,
+      url: review.url || null,
+    });
+  }
+
+  for (const snippet of web.glassdoorSnippets) {
+    pushUnique({
+      key: `gd-${snippet.slice(0, 40)}`,
+      platform: "Glassdoor",
+      rating: web.glassdoorRating,
+      title: "Glassdoor 평가 요약",
+      meta: formatReviewCount(web.glassdoorReviewCount),
+      likes: null,
+      dislikes: null,
+      body: snippet,
+      subRatings: [],
+      url: web.glassdoorUrl,
+    });
+  }
+
+  for (const review of web.websiteReviews) {
+    pushUnique({
+      key: `web-${review.url}-${review.text.slice(0, 40)}`,
+      platform: review.source || "웹 리뷰",
+      rating: review.rating ? parseFloat(String(review.rating).replace(/[^\d.]/g, "")) || null : null,
+      title: review.author ? `${review.author} 평가` : "웹사이트·리뷰 사이트 평가",
+      meta: null,
+      likes: null,
+      dislikes: null,
+      body: review.text,
+      subRatings: [],
+      url: review.url || null,
+    });
+  }
+
+  for (const comment of web.snsComments) {
+    pushUnique({
+      key: `sns-${comment.platform}-${comment.text.slice(0, 40)}`,
+      platform: comment.platform,
+      rating: comment.rating ? parseFloat(String(comment.rating).replace(/[^\d.]/g, "")) || null : null,
+      title: comment.author ? `${comment.author} 댓글` : `${comment.platform} 댓글`,
+      meta: comment.date,
+      likes: null,
+      dislikes: null,
+      body: comment.text,
+      subRatings: [],
+      url: comment.url || null,
+    });
+  }
+
+  return items;
+}
+
+function OnlineReviewsSection({ profile }: { profile: CompanyProfile }) {
+  const web = profile.webEnrichment;
+  const items = buildOnlineEvalItems(profile);
+
+  if (items.length === 0) {
+    return (
+      <div className="border-t border-neutral-200 px-4 py-4">
+        <p className="text-[11px] font-semibold text-neutral-500">온라인 평가</p>
+        <p className="mt-2 text-xs text-neutral-500">수집된 온라인 댓글·평가가 없습니다.</p>
+      </div>
+    );
+  }
+
+  const summaryParts = [
+    web.ambitionBoxRating !== null
+      ? `AmbitionBox ${web.ambitionBoxRating.toFixed(1)} (${web.ambitionBoxReviewCount ?? items.filter((i) => i.platform === "AmbitionBox").length}건)`
+      : null,
+    web.glassdoorRating !== null
+      ? `Glassdoor ${web.glassdoorRating.toFixed(1)}${web.glassdoorReviewCount !== null ? ` (${formatReviewCount(web.glassdoorReviewCount)})` : ""}`
+      : null,
+    web.googleMapsRating !== null ? `구글맵 ${web.googleMapsRating.toFixed(1)}` : null,
   ].filter(Boolean);
 
   return (
     <div className="border-t border-neutral-200 px-4 py-4">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <p className="text-[11px] font-semibold text-neutral-500">직원 리뷰</p>
-          {metaParts.length > 0 && (
-            <p className="mt-0.5 text-[11px] text-neutral-400">{metaParts.join(" · ")} · AmbitionBox</p>
-          )}
-        </div>
-        {web.ambitionBoxUrl && (
-          <a
-            href={web.ambitionBoxUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-[11px] text-neutral-500 underline"
-          >
-            원문 보기
-          </a>
-        )}
+      <div className="mb-3">
+        <p className="text-[11px] font-semibold text-neutral-500">온라인 평가</p>
+        <p className="mt-0.5 text-[11px] text-neutral-400">
+          수집된 댓글·평가 {items.length}건
+          {summaryParts.length > 0 ? ` · ${summaryParts.join(" · ")}` : ""}
+        </p>
       </div>
 
-      <div className="space-y-4">
-        {reviews.map((review, index) => (
-          <EmployeeReviewCard key={`${review.url}-${index}`} review={review} />
+      <div className="space-y-3">
+        {items.map((item) => (
+          <OnlineEvalCard key={item.key} item={item} />
         ))}
       </div>
     </div>
   );
 }
 
-function EmployeeReviewCard({ review }: { review: EmployeeReview }) {
-  const meta = [
-    review.jobProfile,
-    review.location,
-    review.department,
-    review.date,
-  ]
-    .filter(Boolean)
-    .join(" · ");
-
+function OnlineEvalCard({ item }: { item: OnlineEvalItem }) {
   return (
     <article className="border border-neutral-200 bg-neutral-50 p-3">
       <div className="flex items-start gap-3">
-        {review.rating !== null && (
+        {item.rating !== null && Number.isFinite(item.rating) && (
           <div className="shrink-0 text-center">
-            <p className="text-lg font-bold text-neutral-900">{review.rating.toFixed(1)}</p>
+            <p className="text-lg font-bold text-neutral-900">{item.rating.toFixed(1)}</p>
             <p className="text-[10px] text-neutral-500">/ 5</p>
           </div>
         )}
         <div className="min-w-0 flex-1">
-          {review.title && <p className="text-xs font-semibold text-neutral-900">{review.title}</p>}
-          {meta && <p className="mt-0.5 text-[11px] text-neutral-500">{meta}</p>}
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-neutral-400">{item.platform}</p>
+          {item.title && <p className="mt-0.5 text-xs font-semibold text-neutral-900">{item.title}</p>}
+          {item.meta && <p className="mt-0.5 text-[11px] text-neutral-500">{item.meta}</p>}
         </div>
       </div>
 
-      {review.subRatings.length > 0 && (
+      {item.subRatings.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-2">
-          {review.subRatings.map((item) => (
+          {item.subRatings.map((sub) => (
             <span
-              key={item.name}
+              key={sub.name}
               className="rounded border border-neutral-200 bg-white px-2 py-1 text-[10px] text-neutral-600"
             >
-              {item.name}: {item.rating}
+              {sub.name}: {sub.rating}
             </span>
           ))}
         </div>
       )}
 
-      {review.likes && (
+      {item.likes && (
         <div className="mt-3">
           <p className="text-[11px] font-semibold text-neutral-700">장점</p>
-          <p className="mt-1 whitespace-pre-line text-xs leading-relaxed text-neutral-800">{review.likes}</p>
+          <p className="mt-1 whitespace-pre-line text-xs leading-relaxed text-neutral-800">{item.likes}</p>
         </div>
       )}
 
-      {review.dislikes && (
+      {item.dislikes && (
         <div className="mt-3">
           <p className="text-[11px] font-semibold text-neutral-700">단점</p>
-          <p className="mt-1 whitespace-pre-line text-xs leading-relaxed text-neutral-800">{review.dislikes}</p>
+          <p className="mt-1 whitespace-pre-line text-xs leading-relaxed text-neutral-800">{item.dislikes}</p>
         </div>
       )}
 
-      {review.workDetails && (
+      {item.body && (
         <div className="mt-3">
-          <p className="text-[11px] font-semibold text-neutral-700">근무 정보</p>
-          <p className="mt-1 text-xs leading-relaxed text-neutral-800">{review.workDetails}</p>
+          {!item.likes && !item.dislikes && (
+            <p className="text-[11px] font-semibold text-neutral-700">평가 내용</p>
+          )}
+          {(item.likes || item.dislikes) && (
+            <p className="text-[11px] font-semibold text-neutral-700">추가 정보</p>
+          )}
+          <p className="mt-1 whitespace-pre-line text-xs leading-relaxed text-neutral-800">{item.body}</p>
         </div>
       )}
 
-      {review.url && (
+      {item.url && (
         <a
-          href={review.url}
+          href={item.url}
           target="_blank"
           rel="noopener noreferrer"
           className="mt-3 inline-block text-[11px] text-neutral-500 underline"
         >
-          AmbitionBox에서 보기
+          원문 보기
         </a>
       )}
     </article>
-  );
-}
-
-function formatWebsiteComments(profile: CompanyProfile): React.ReactNode {  const comments = profile.webEnrichment.websiteReviews
-    .map((r) => {
-      const parts = [r.rating ? `★ ${r.rating}` : null, r.author, r.text].filter(Boolean);
-      return parts.join(" · ");
-    })
-    .filter((text) => text.length > 0);
-
-  if (comments.length === 0) return EMPTY;
-
-  return (
-    <ul className="space-y-2">
-      {comments.map((text, i) => (
-        <li key={i} className="text-xs leading-relaxed text-neutral-800">
-          {text}
-        </li>
-      ))}
-    </ul>
   );
 }
 
@@ -277,27 +350,96 @@ export function CompanyDetail({ profile, onClose }: CompanyDetailProps) {
       <dl className="px-4 py-1">
         <ListRow label="회사명" value={profile.name || profile.cin} />
         <ListRow label="CIN" value={profile.cin} />
+        <ListRow label="상태" value={profile.status && profile.status !== "Unknown" ? profile.status : EMPTY} />
+        <ListRow label="회사 유형" value={profile.type || profile.listingStatus || EMPTY} />
         {profile.summary && <ListRow label="요약" value={formatMultilineText(profile.summary)} />}
         <ListRow
           label="사업 내용"
           value={formatMultilineText(web.businessDescription || profile.industry || EMPTY)}
         />
+        <ListRow label="업종" value={profile.industry || profile.cinParsed.industryDescription || EMPTY} />
         <ListRow label="주소" value={formatMultilineText(address)} />
+        <ListRow label="이메일" value={profile.email || web.email || EMPTY} />
+        <ListRow label="전화" value={profile.phone || web.phone || EMPTY} />
         <ListRow label="대표" value={getRepresentative(profile.directors)} />
         <ListRow label="등기이사" value={formatDirectors(profile.directors)} />
+        <ListRow
+          label="관련 회사"
+          value={
+            profile.connectedCompanies.length > 0 ? (
+              <ul className="space-y-1">
+                {profile.connectedCompanies.map((company) => (
+                  <li key={company.cin} className="text-xs leading-relaxed">
+                    {company.url ? (
+                      <a
+                        href={company.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="underline"
+                      >
+                        {company.name}
+                      </a>
+                    ) : (
+                      company.name
+                    )}{" "}
+                    <span className="text-neutral-500">({company.cin})</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              EMPTY
+            )
+          }
+        />
         <ListRow label="자본금" value={formatCapitalInr(profile.authorizedCapitalInr)} />
         <ListRow label="납입 자본금" value={formatCapitalInr(profile.paidUpCapitalInr)} />
+        <ListRow label="최근 AGM" value={profile.lastAgmDate || EMPTY} />
+        <ListRow label="담보(Charges)" value={profile.chargesSummary || EMPTY} />
         <ListRow label="매출" value={revenue} />
         <ListRow label="직원수" value={employees} />
         <ListRow label="웹사이트" value={formatWebsite(website)} />
         {web.googleMapsRating !== null && (
           <ListRow label="구글맵 평점" value={<GoogleMapsRatingRow profile={profile} />} />
         )}
-        <ListRow label="설립일" value={founded || EMPTY} />
-        <ListRow label="웹사이트 댓글" value={formatWebsiteComments(profile)} />
+        {web.glassdoorRating !== null && (
+          <ListRow
+            label="Glassdoor"
+            value={
+              <div className="flex flex-wrap items-center gap-2">
+                <StarRating rating={web.glassdoorRating} />
+                <span className="text-xs text-neutral-800">
+                  {[
+                    `${web.glassdoorRating.toFixed(1)} / 5`,
+                    formatReviewCount(web.glassdoorReviewCount),
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </span>
+                {web.glassdoorUrl && (
+                  <a
+                    href={web.glassdoorUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[11px] text-neutral-500 underline"
+                  >
+                    Glassdoor 보기
+                  </a>
+                )}
+              </div>
+            }
+          />
+        )}
+        <ListRow
+          label="설립일"
+          value={
+            founded !== EMPTY && profile.ageYears > 0
+              ? `${founded} (${profile.ageYears}년)`
+              : founded || EMPTY
+          }
+        />
       </dl>
 
-      <EmployeeReviewsSection profile={profile} />
+      <OnlineReviewsSection profile={profile} />
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import type { Director, WebLink } from "./types";
+import type { ConnectedCompany, Director, WebLink } from "./types";
 import { isSafeOutboundUrl } from "./security-utils";
 
 const USER_AGENT =
@@ -19,6 +19,9 @@ export interface RegistryCompanyData {
   businessActivity?: string;
   authorizedCapitalInr?: number;
   paidUpCapitalInr?: number;
+  lastAgmDate?: string;
+  chargesSummary?: string;
+  connectedCompanies?: ConnectedCompany[];
   directors: Director[];
   relatedLinks: WebLink[];
   sources: string[];
@@ -101,9 +104,22 @@ function extractJsonLdOrganization(jsonLd: Record<string, unknown> | null): Reco
 
 function parseCapitalAmount(value: string | number | null | undefined): number | null {
   if (value === null || value === undefined) return null;
-  const normalized = String(value).replace(/,/g, "").trim();
+  const normalized = String(value).replace(/,/g, "").replace(/₹/g, "").trim();
   if (!normalized) return null;
-  const amount = parseInt(normalized, 10);
+
+  const lacMatch = normalized.match(/([\d.]+)\s*(?:l|lac|lacs|lakh|lakhs)\b/i);
+  if (lacMatch) {
+    const amount = Math.round(parseFloat(lacMatch[1]) * 100_000);
+    return Number.isFinite(amount) && amount > 0 ? amount : null;
+  }
+
+  const croreMatch = normalized.match(/([\d.]+)\s*(?:cr|crore|crores)\b/i);
+  if (croreMatch) {
+    const amount = Math.round(parseFloat(croreMatch[1]) * 10_000_000);
+    return Number.isFinite(amount) && amount > 0 ? amount : null;
+  }
+
+  const amount = parseInt(normalized.replace(/[^\d]/g, ""), 10);
   return Number.isFinite(amount) && amount > 0 ? amount : null;
 }
 
@@ -112,15 +128,188 @@ function parseCapitalFromText(text: string): {
   paidUpCapitalInr: number | null;
 } {
   const authorizedMatch = text.match(
-    /(?:authorised|authorized)\s+capital(?:\s+is)?\s*(?:rs\.?|inr|₹)?\s*([\d,]+)/i
+    /(?:authorised|authorized)(?:\s+share)?\s+capital(?:\s+is)?\s*(?:INR|Rs\.?|₹)?\s*([\d,.]+(?:\s*(?:L|Lac|Lacs|Lakh|Lakhs|Cr|Crore))?)/i
   );
   const paidUpMatch = text.match(
-    /(?:paid[\s-]*up|paidup)\s+capital(?:\s+is)?\s*(?:rs\.?|inr|₹)?\s*([\d,]+)/i
+    /(?:paid[\s-]*up|paidup)(?:\s+share)?\s+capital(?:\s+is)?\s*(?:INR|Rs\.?|₹)?\s*([\d,.]+(?:\s*(?:L|Lac|Lacs|Lakh|Lakhs|Cr|Crore))?)/i
   );
 
   return {
     authorizedCapitalInr: parseCapitalAmount(authorizedMatch?.[1] ?? null),
     paidUpCapitalInr: parseCapitalAmount(paidUpMatch?.[1] ?? null),
+  };
+}
+
+function extractRegisteredDetail(html: string, label: string): string | null {
+  const pattern = new RegExp(
+    `${label}\\s*<\\/h3>\\s*<span[^>]*>\\s*([^<]+?)\\s*<\\/span>`,
+    "i"
+  );
+  const match = html.match(pattern);
+  return match?.[1]?.replace(/\s+/g, " ").trim() || null;
+}
+
+function parseToflerPage(html: string, cin: string): Partial<RegistryCompanyData> | null {
+  if (!html || html.length < 1000) return null;
+  if (/just a moment|enable javascript|403 forbidden/i.test(html) && html.length < 10000) {
+    return null;
+  }
+
+  const organization = extractJsonLdOrganization(parseJsonLd(html));
+  const breadcrumbName = [...html.matchAll(/"name"\s*:\s*"([^"]+PRIVATE LIMITED)"/gi)].map(
+    (m) => m[1]
+  )[0];
+  const name =
+    (typeof organization?.name === "string" ? organization.name : null) ||
+    breadcrumbName ||
+    html.match(/FAQ\s*-\s*([A-Z][A-Z0-9 &.'()-]+PRIVATE LIMITED)/i)?.[1] ||
+    html.match(/([A-Z][A-Z0-9 &.'()-]{3,80}PRIVATE LIMITED)/)?.[1];
+
+  if (!name) return null;
+
+  const text = htmlToText(html);
+  const descriptionMatch = html.match(
+    new RegExp(`${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[\\s\\S]{0,80}?is an unlisted[\\s\\S]{0,500}?CIN[^.]{0,40}${cin}[\\s\\S]{0,220}`, "i")
+  );
+  const description = descriptionMatch
+    ? htmlToText(descriptionMatch[0]).replace(/\s+/g, " ").trim()
+    : undefined;
+
+  const address =
+    text.match(
+      /registered address is at\s+((?:(?!\.\s+[A-Z]).){20,260}?\d{6})/i
+    )?.[1]?.trim() ||
+    html
+      .match(/registered address is at\s+([^<]{20,260})/i)?.[1]
+      ?.replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .replace(/\.\s*$/, "")
+      .trim() ||
+    undefined;
+
+  const incorporation =
+    text.match(/incorporated on\s+([0-9]{1,2}\s+[A-Za-z]+,?\s+[0-9]{4})/i)?.[1] ||
+    text.match(/incorporation date[^\d]{0,40}([0-9]{1,2}\s+[A-Za-z]+,?\s+[0-9]{4})/i)?.[1] ||
+    undefined;
+
+  const status =
+    text.match(/current status[^\n]{0,80}\b(Active|Inactive|Struck Off)\b/i)?.[1] ||
+    text.match(/\bis - (Active|Inactive|Struck Off)\b/i)?.[1] ||
+    text.match(/\b(Active|Inactive|Struck Off)\b/i)?.[1];
+  const email = extractRegisteredDetail(html, "Company Email");
+  const paidUpRaw = extractRegisteredDetail(html, "Paid up Capital");
+  const authorisedRaw = extractRegisteredDetail(html, "Authorised Capital");
+  const capitalFromText = parseCapitalFromText(text);
+
+  const directors: Director[] = [];
+  const seenDin = new Set<string>();
+  const directorMatches = [
+    ...html.matchAll(/<a[^>]+href="\/[^"]*?\/director\/(\d{8})"[^>]*>([^<]+)<\/a>/gi),
+  ];
+
+  for (const match of directorMatches) {
+    const din = match[1];
+    if (seenDin.has(din)) continue;
+    seenDin.add(din);
+    directors.push({
+      din,
+      name: match[2].replace(/\s+/g, " ").trim(),
+      designation: "Director",
+      appointmentDate: "",
+      cessationDate: null,
+      status: "Current",
+    });
+  }
+
+  if (directors.length === 0) {
+    const fallback = text.match(/has (?:two|three|four|\d+)\s+directors?\s*-\s*([^.]+)/i)?.[1];
+    if (fallback) {
+      for (const rawName of fallback.split(/\s+and\s+|,\s*/)) {
+        const cleaned = rawName.replace(/\s+/g, " ").trim();
+        if (cleaned.length > 2) {
+          directors.push({
+            din: "",
+            name: cleaned,
+            designation: "Director",
+            appointmentDate: "",
+            cessationDate: null,
+            status: "Current",
+          });
+        }
+      }
+    }
+  }
+
+  const slug =
+    html.match(new RegExp(`tofler\\.in\\/([a-z0-9-]+)\\/company\\/${cin}`, "i"))?.[1] ||
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+
+  const lastAgmDate =
+    text.match(/AGM[^\d]{0,80}?(\d{1,2}\s+[A-Za-z]+,?\s+\d{4})/i)?.[1] ||
+    text.match(/held on\s+(\d{1,2}\s+[A-Za-z]+,?\s+\d{4})/i)?.[1] ||
+    extractRegisteredDetail(html, "AGM") ||
+    undefined;
+
+  const industrySlug = html.match(/companylist\/[a-z-]+\/([a-z0-9-]+)/i)?.[1];
+  const businessActivity = industrySlug
+    ? industrySlug
+        .split("-")
+        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+        .join(" ")
+    : undefined;
+
+  const chargesSummary = /no registered charges/i.test(text)
+    ? "등록된 담보(Charges) 없음"
+    : text.match(/charges?[^\n.]{0,80}/i)?.[0]?.trim();
+
+  const connectedCompanies: ConnectedCompany[] = [];
+  const seenConnected = new Set<string>();
+  for (const match of html.matchAll(
+    /href="\/([a-z0-9-]+)\/company\/([UL]\d{5}[A-Z]{2}\d{4}[A-Z]{3}\d{6})"/gi
+  )) {
+    const connectedCin = match[2].toUpperCase();
+    if (connectedCin === cin.toUpperCase() || seenConnected.has(connectedCin)) continue;
+    seenConnected.add(connectedCin);
+    connectedCompanies.push({
+      name: match[1]
+        .split("-")
+        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+        .join(" "),
+      cin: connectedCin,
+      url: `https://www.tofler.in/${match[1]}/company/${connectedCin}`,
+    });
+    if (connectedCompanies.length >= 8) break;
+  }
+
+  return {
+    name: name.replace(/\s+/g, " ").trim(),
+    slug,
+    status: status || undefined,
+    type: /private/i.test(text) ? "Private Limited Company" : undefined,
+    listingStatus: /unlisted/i.test(text) ? "Unlisted" : undefined,
+    dateOfIncorporation: incorporation,
+    registeredAddress: address,
+    email: email && !/tofler\.in/i.test(email) ? email : undefined,
+    description,
+    businessActivity,
+    authorizedCapitalInr:
+      parseCapitalAmount(authorisedRaw) ?? capitalFromText.authorizedCapitalInr ?? undefined,
+    paidUpCapitalInr: parseCapitalAmount(paidUpRaw) ?? capitalFromText.paidUpCapitalInr ?? undefined,
+    lastAgmDate,
+    chargesSummary,
+    connectedCompanies,
+    directors,
+    relatedLinks: [
+      {
+        label: `Tofler - ${name}`,
+        url: `https://www.tofler.in/${slug}/company/${cin}`,
+        type: "source",
+      },
+    ],
+    sources: ["Tofler"],
   };
 }
 
@@ -378,6 +567,7 @@ function mergeRegistryData(
   const merged: RegistryCompanyData = {
     name: "",
     directors: [],
+    connectedCompanies: [],
     relatedLinks: [],
     sources: [],
   };
@@ -406,6 +596,11 @@ function mergeRegistryData(
     }
     if (!merged.paidUpCapitalInr && part.paidUpCapitalInr) {
       merged.paidUpCapitalInr = part.paidUpCapitalInr;
+    }
+    if (!merged.lastAgmDate && part.lastAgmDate) merged.lastAgmDate = part.lastAgmDate;
+    if (!merged.chargesSummary && part.chargesSummary) merged.chargesSummary = part.chargesSummary;
+    if (!merged.connectedCompanies?.length && part.connectedCompanies?.length) {
+      merged.connectedCompanies = part.connectedCompanies;
     }
     if (part.directors?.length) {
       for (const director of part.directors) {
@@ -456,13 +651,20 @@ function mergeRegistryData(
 
 export async function fetchRegistryByCin(cin: string): Promise<RegistryCompanyData | null> {
   const normalizedCin = cin.toUpperCase().trim();
-  const qorpiqHtml = await fetchHtml(`https://qorpiq.com/company/${normalizedCin}`);
+
+  const [qorpiqHtml, toflerHtml] = await Promise.all([
+    fetchHtml(`https://qorpiq.com/company/${normalizedCin}`),
+    fetchHtml(`https://www.tofler.in/company/${normalizedCin}`),
+  ]);
+
   const qorpiqData = qorpiqHtml ? parseQorpiqPage(qorpiqHtml, normalizedCin) : null;
   const qorpiqEmbedded = qorpiqHtml ? parseQorpiqEmbeddedProfile(qorpiqHtml) : null;
+  const toflerData = toflerHtml ? parseToflerPage(toflerHtml, normalizedCin) : null;
 
   let indiaFilingsData: Partial<RegistryCompanyData> | null = null;
   const slug =
     qorpiqData?.slug ??
+    toflerData?.slug ??
     qorpiqHtml?.match(new RegExp(`/company/([a-z0-9-]+)/${normalizedCin}`, "i"))?.[1];
   if (slug) {
     const indiaFilingsHtml = await fetchHtml(
@@ -473,5 +675,10 @@ export async function fetchRegistryByCin(cin: string): Promise<RegistryCompanyDa
     }
   }
 
-  return mergeRegistryData(normalizedCin, [qorpiqEmbedded, qorpiqData, indiaFilingsData]);
+  return mergeRegistryData(normalizedCin, [
+    qorpiqEmbedded,
+    qorpiqData,
+    toflerData,
+    indiaFilingsData,
+  ]);
 }

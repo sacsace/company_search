@@ -25,6 +25,12 @@ export interface Shareholder {
   source: string;
 }
 
+export interface ConnectedCompany {
+  name: string;
+  cin: string;
+  url: string | null;
+}
+
 export interface WebLink {
   label: string;
   url: string;
@@ -108,7 +114,68 @@ export interface WebEnrichment {
   googleMapsRating: number | null;
   googleMapsReviewCount: number | null;
   googleMapsUrl: string | null;
+  glassdoorRating: number | null;
+  glassdoorReviewCount: number | null;
+  glassdoorUrl: string | null;
+  glassdoorGoogleSearchUrl: string | null;
+  glassdoorSnippets: string[];
   discoveredDirectors: Director[];
+  newsItems: WebSnippet[];
+  indiaOpsSnippets: WebSnippet[];
+  relationSnippets: WebSnippet[];
+  riskSnippets: WebSnippet[];
+}
+
+export type FactConfidence = "confirmed" | "estimated" | "conflict" | "missing";
+export type EntityScope = "india-entity" | "parent" | "group" | "unknown";
+
+export interface ReportSource {
+  label: string;
+  url: string;
+  date: string | null;
+}
+
+export interface ReportFact {
+  label: string;
+  value: string;
+  confidence: FactConfidence;
+  entityScope: EntityScope;
+  sources: ReportSource[];
+  notes: string | null;
+}
+
+export interface ReportSection {
+  id: string;
+  title: string;
+  facts: ReportFact[];
+}
+
+export interface CompanyReport {
+  profile: CompanyProfile;
+  generatedAt: string;
+  headline: string[];
+  identity: {
+    name: string;
+    cin: string;
+    website: string | null;
+    status: string;
+    type: string;
+    listingStatus: string;
+  };
+  sections: ReportSection[];
+  sources: ReportSource[];
+  reviews: {
+    ambitionBoxRating: number | null;
+    ambitionBoxReviewCount: number | null;
+    ambitionBoxUrl: string | null;
+    googleMapsRating: number | null;
+    googleMapsUrl: string | null;
+    glassdoorRating: number | null;
+    glassdoorUrl: string | null;
+    employeeReviews: EmployeeReview[];
+    websiteReviews: WebsiteReview[];
+    glassdoorSnippets: string[];
+  };
 }
 
 export interface CompanyProfile {
@@ -134,11 +201,14 @@ export interface CompanyProfile {
   lastAgmDate: string | null;
   lastBalanceSheetDate: string | null;
   email: string | null;
+  phone: string | null;
+  chargesSummary: string | null;
   nicCode: string;
   industry: string;
   cinParsed: CinInfo;
   directors: Director[];
   shareholders: Shareholder[];
+  connectedCompanies: ConnectedCompany[];
   webEnrichment: WebEnrichment;
   summary: string;
   dataSources: string[];

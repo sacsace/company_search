@@ -83,6 +83,17 @@ function mapReview(raw: AmbitionBoxReviewRaw, pageUrl: string): EmployeeReview {
     .filter(Boolean)
     .join(" · ");
 
+  const likes = raw.likesText?.trim() || null;
+  const dislikes = raw.disLikesText?.trim() || null;
+  const subRatings = (raw.ratingDistribution ?? [])
+    .filter((item) => item.name && typeof item.rating === "number")
+    .map((item) => ({ name: item.name!, rating: item.rating! }));
+
+  const ratingSummary =
+    !likes && !dislikes && subRatings.length > 0
+      ? `세부 평가: ${subRatings.map((item) => `${item.name} ${item.rating}/5`).join(", ")}`
+      : null;
+
   return {
     platform: "AmbitionBox",
     rating: typeof raw.overallCompanyRating === "number" ? raw.overallCompanyRating : null,
@@ -90,12 +101,10 @@ function mapReview(raw: AmbitionBoxReviewRaw, pageUrl: string): EmployeeReview {
     jobProfile: raw.jobProfile?.name?.trim() || null,
     location: raw.jobLocation?.name?.trim() || null,
     department: raw.division?.trim() || null,
-    likes: raw.likesText?.trim() || null,
-    dislikes: raw.disLikesText?.trim() || null,
-    workDetails: workDetails || null,
-    subRatings: (raw.ratingDistribution ?? [])
-      .filter((item) => item.name && typeof item.rating === "number")
-      .map((item) => ({ name: item.name!, rating: item.rating! })),
+    likes,
+    dislikes,
+    workDetails: [workDetails, ratingSummary].filter(Boolean).join("\n") || null,
+    subRatings,
     date: raw.modifiedHumanReadable || raw.created?.split(" ")[0] || null,
     url: raw.url ? `${BASE_URL}${raw.url}` : pageUrl,
     helpfulCount: raw.helpfulCount ?? null,

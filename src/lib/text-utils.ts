@@ -12,7 +12,7 @@ const FOREIGN_SITE_PATTERNS = [
 
 const CJK_REGEX = /[\u4e00-\u9fff\u3400-\u4dbf\u3040-\u30ff]/;
 const BOILERPLATE_PATTERNS =
-  /nos gustaría|no lo permite|sitios cercanos|restaurantes|gasolineras|cajeros|google maps$/i;
+  /nos gustaría|no lo permite|sitios cercanos|restaurantes|gasolineras|cajeros|google maps$|enjoy the videos and music|keyboard shortcuts|autoplay videos|how to earn money on youtube|sign in to create & share|upload youtube videos|chatgpt castling|github help|pages documentation/i;
 
 export function decodeHtmlEntities(text: string): string {
   return text

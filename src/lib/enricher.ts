@@ -1,5 +1,6 @@
 import type { WebEnrichment, WebInsight, WebLink } from "./types";
 import { fetchAmbitionBoxReviews } from "./ambitionbox-scraper";
+import { fetchGlassdoorReviews } from "./glassdoor-scraper";
 import { fetchGoogleMapsRating } from "./google-maps-scraper";
 import { fetchWebsiteReviews, fetchSnsComments, fetchWebReviewSnippets, commentsFromReviewSearch } from "./reviews-scraper";
 import { parseBusinessActivity, parseDirectorsFromText } from "./registry-scraper";
@@ -630,8 +631,25 @@ export async function enrichFromWeb(
     type: "source",
   });
 
-  const [mainResults, linkedInResults, googleReviewResults, snsResults, directorResults, businessResults] =
-    await Promise.all([
+  const koreanNameHint = /[가-힣]/.test(companyName) ? companyName : null;
+  const shortName = companyName
+    .replace(/\b(private|pvt|limited|ltd|llp|inc|corp|company)\b\.?/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const [
+    mainResults,
+    linkedInResults,
+    googleReviewResults,
+    snsResults,
+    directorResults,
+    businessResults,
+    productResults,
+    indiaResults,
+    relationResults,
+    newsResults,
+    koreanResults,
+  ] = await Promise.all([
     searchWeb(`"${companyName}" ${cin} India company revenue employees founded`, 6),
     searchWeb(`"${companyName}" site:linkedin.com/company India`, 4),
     searchWeb(`"${companyName}" google reviews ratings India`, 6),
@@ -641,6 +659,18 @@ export async function enrichFromWeb(
     ),
     searchWeb(`"${companyName}" ${cin} directors DIN India MCA`, 5),
     searchWeb(`"${companyName}" ${cin} business activity what does company do India`, 5),
+    searchWeb(`"${companyName}" OR "${shortName}" products services manufacturing official website`, 5),
+    searchWeb(`"${companyName}" OR "${shortName}" India factory OR plant OR office OR investment`, 5),
+    searchWeb(
+      `"${companyName}" OR "${shortName}" parent company OR subsidiary OR joint venture OR customer OR supplier`,
+      5
+    ),
+    searchWeb(`"${companyName}" OR "${shortName}" India investment OR hiring OR expansion OR news`, 5),
+    koreanNameHint
+      ? searchWeb(`"${koreanNameHint}" 인도 법인 OR 공장 OR 투자 OR 진출`, 4)
+      : shortName
+        ? searchWeb(`"${shortName}" 인도 법인 OR 인도 공장 OR 인도 진출`, 3)
+        : Promise.resolve([]),
   ]);
 
   for (const result of mainResults) {
@@ -651,16 +681,48 @@ export async function enrichFromWeb(
   }
   if (mainResults.length > 0) sources.push("Web Search");
 
-  for (const result of [...directorResults, ...businessResults]) {
+  const expandedBuckets = [
+    ...directorResults,
+    ...businessResults,
+    ...productResults,
+    ...indiaResults,
+    ...relationResults,
+    ...newsResults,
+    ...koreanResults,
+  ];
+
+  for (const result of expandedBuckets) {
     if (isBlacklisted(result.url) || !isRelevantSearchResult(result)) continue;
     combinedText += " " + result.snippet;
     rawSnippets.push({ text: result.snippet, source: result.title, url: result.url });
     relatedLinks.push({ label: result.title, url: result.url, type: "source" });
   }
-  if (directorResults.length > 0 || businessResults.length > 0) sources.push("Web Search");
+  if (expandedBuckets.length > 0) sources.push("Web Search");
+
+  const toSnippets = (results: typeof mainResults) =>
+    results
+      .filter((result) => !isBlacklisted(result.url) && isRelevantSearchResult(result) && result.snippet.trim())
+      .map((result) => ({
+        text: result.snippet.trim(),
+        source: result.title,
+        url: result.url,
+      }));
+
+  const newsItems = toSnippets(newsResults).slice(0, 6);
+  const indiaOpsSnippets = toSnippets([...indiaResults, ...koreanResults]).slice(0, 6);
+  const relationSnippets = toSnippets(relationResults).slice(0, 6);
+  const riskSnippets = toSnippets(
+    [...newsResults, ...mainResults].filter((result) =>
+      /lawsuit|dispute|sanction|fraud|strike|closure|shutdown|폐업|분쟁|제재|소송/i.test(
+        `${result.title} ${result.snippet}`
+      )
+    )
+  ).slice(0, 4);
 
   const discoveredDirectors = parseDirectorsFromText(
-    [...directorResults, ...mainResults, ...businessResults].map((r) => `${r.title} ${r.snippet}`).join(" ")
+    [...directorResults, ...mainResults, ...businessResults, ...koreanResults]
+      .map((r) => `${r.title} ${r.snippet}`)
+      .join(" ")
   );
 
   const linkedInUrl = findLinkedInUrl(linkedInResults);
@@ -682,7 +744,16 @@ export async function enrichFromWeb(
     (link) => link.type === "source" && !isBlacklisted(link.url) && !isAggregatorUrl(link.url)
   )?.url;
 
-  const allSearchResults = [...mainResults, ...directorResults, ...businessResults];
+  const allSearchResults = [
+    ...mainResults,
+    ...directorResults,
+    ...businessResults,
+    ...productResults,
+    ...indiaResults,
+    ...relationResults,
+    ...newsResults,
+    ...koreanResults,
+  ];
   let website: string | null =
     (await resolveCompanyWebsite(companyName, cin, allSearchResults, registryEmail)) ??
     websiteFromSearch ??
@@ -815,7 +886,8 @@ export async function enrichFromWeb(
     /review|comment|feedback|rating|employee|experience|recommend/i.test(`${r.title} ${r.snippet}`)
   );
 
-  const [snsFetched, webReviewSnippets, siteReviews, ambitionBoxData, googleMapsData] = await Promise.all([
+  const [snsFetched, webReviewSnippets, siteReviews, ambitionBoxData, googleMapsData, glassdoorData] =
+    await Promise.all([
     fetchSnsComments(companyName),
     fetchWebReviewSnippets(companyName),
     website
@@ -826,6 +898,7 @@ export async function enrichFromWeb(
       companyName,
       addressMatch?.[1]?.trim() ?? registryAddress ?? websiteData.text.match(/\b\d{6}\b[^<\n]{0,120}/)?.[0] ?? null
     ),
+    fetchGlassdoorReviews(companyName),
   ]);
 
   const mergedComments = [
@@ -874,6 +947,19 @@ export async function enrichFromWeb(
       type: "source",
     });
   }
+  if (glassdoorData.rating !== null || glassdoorData.snippets.length > 0) {
+    sources.push("Glassdoor");
+    relatedLinks.push({
+      label: "Glassdoor",
+      url: glassdoorData.pageUrl ?? glassdoorData.searchUrl,
+      type: "source",
+    });
+  }
+
+  const employeeReviews = [
+    ...ambitionBoxData.reviews.slice(0, 10),
+    ...glassdoorData.reviews.slice(0, 5),
+  ];
 
   return {
     website,
@@ -899,14 +985,23 @@ export async function enrichFromWeb(
     crawledPages: websiteData.pages,
     snsComments: snsComments.slice(0, 15),
     websiteReviews: websiteReviews.slice(0, 15),
-    employeeReviews: ambitionBoxData.reviews.slice(0, 10),
+    employeeReviews,
     ambitionBoxUrl: ambitionBoxData.pageUrl,
     ambitionBoxRating: ambitionBoxData.companyRating,
     ambitionBoxReviewCount: ambitionBoxData.reviewCount,
     googleMapsRating: googleMapsData?.rating ?? null,
     googleMapsReviewCount: googleMapsData?.reviewCount ?? null,
     googleMapsUrl: googleMapsData?.mapsUrl ?? null,
+    glassdoorRating: glassdoorData.rating,
+    glassdoorReviewCount: glassdoorData.reviewCount,
+    glassdoorUrl: glassdoorData.pageUrl ?? glassdoorData.searchUrl,
+    glassdoorGoogleSearchUrl: glassdoorData.googleSearchUrl,
+    glassdoorSnippets: glassdoorData.snippets.slice(0, 6),
     discoveredDirectors,
+    newsItems,
+    indiaOpsSnippets,
+    relationSnippets,
+    riskSnippets,
   };
 }
 

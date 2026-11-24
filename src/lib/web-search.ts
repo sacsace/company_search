@@ -184,6 +184,34 @@ async function searchDuckDuckGo(query: string): Promise<CompanySearchResult[]> {
   return extractCompaniesFromHtml(html, query);
 }
 
+async function lookupByCinOnTofler(cin: string): Promise<CompanySearchResult[]> {
+  const normalizedCin = cin.toUpperCase();
+  const html = await fetchHtml(`https://www.tofler.in/company/${normalizedCin}`);
+  if (!html) return [];
+
+  const orgName =
+    html.match(/"@type"\s*:\s*"Organization"[\s\S]{0,120}?"name"\s*:\s*"([^"]+)"/i)?.[1] ||
+    html.match(/FAQ\s*-\s*([A-Z][A-Z0-9 &.'()-]+PRIVATE LIMITED)/i)?.[1] ||
+    html.match(/([A-Z][A-Z0-9 &.'()-]{3,80}PRIVATE LIMITED)/)?.[1];
+
+  if (!orgName) return [];
+
+  const results: CompanySearchResult[] = [];
+  const seen = new Set<string>();
+  pushCompany(results, seen, normalizedCin, orgName.replace(/\s+/g, " ").trim());
+
+  const address = html
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .match(/registered address is at\s+((?:(?!\.\s+[A-Z]).){20,260}?\d{6})/i)?.[1]
+    ?.trim();
+  if (results[0] && address) {
+    results[0].registeredOffice = address;
+  }
+
+  return results;
+}
+
 export async function searchCompaniesByWeb(
   query: string,
   limit = 20
@@ -194,6 +222,14 @@ export async function searchCompaniesByWeb(
   const sources: string[] = [];
   const allResults: CompanySearchResult[] = [];
   const seen = new Set<string>();
+
+  const cinOnly = /^[UL]\d{5}[A-Z]{2}\d{4}[A-Z]{3}\d{6}$/i.test(trimmed);
+  if (cinOnly) {
+    const toflerResults = await lookupByCinOnTofler(trimmed.toUpperCase());
+    if (toflerResults.length > 0) {
+      return { results: toflerResults.slice(0, limit), source: "Tofler" };
+    }
+  }
 
   const searchFns = [
     { fn: () => searchYahoo(trimmed), source: "Yahoo Search" },
@@ -207,7 +243,8 @@ export async function searchCompaniesByWeb(
     if (results.length > 0) {
       sources.push(source);
       for (const r of results) {
-        if (!seen.has(r.cin) && scoreMatch(r.name, trimmed) >= 15) {
+        const acceptPlaceholder = cinOnly && r.cin.toUpperCase() === trimmed.toUpperCase();
+        if (!seen.has(r.cin) && (scoreMatch(r.name, trimmed) >= 15 || acceptPlaceholder)) {
           seen.add(r.cin);
           allResults.push(r);
         }

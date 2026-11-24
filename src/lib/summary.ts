@@ -78,11 +78,17 @@ export function generateCompanySummary(profile: CompanyProfile): string {
     }
   }
 
-  if (web.snsComments.length > 0 || web.websiteReviews.length > 0 || web.employeeReviews.length > 0) {
+  if (web.snsComments.length > 0 || web.websiteReviews.length > 0 || web.employeeReviews.length > 0 || web.glassdoorRating !== null) {
     const reviewCount = web.snsComments.length + web.websiteReviews.length + web.employeeReviews.length;
     parts.push(`온라인 댓글·리뷰 ${reviewCount}건을 수집했습니다.`);
-    if (web.employeeReviews.length > 0) {
-      parts.push(`AmbitionBox 직원 리뷰 ${web.employeeReviews.length}건 포함.`);
+    if (web.glassdoorRating !== null) {
+      parts.push(
+        `Glassdoor 평점 ${web.glassdoorRating.toFixed(1)}점${web.glassdoorReviewCount !== null ? ` (${web.glassdoorReviewCount}건)` : ""}.`
+      );
+    }
+    if (web.employeeReviews.some((r) => r.platform === "AmbitionBox")) {
+      const ambitionCount = web.employeeReviews.filter((r) => r.platform === "AmbitionBox").length;
+      parts.push(`AmbitionBox 직원 리뷰 ${ambitionCount}건 포함.`);
     }
   }
 
@@ -94,50 +100,125 @@ export function generateComparisonSummary(companies: CompanyProfile[]): string {
 
   const names = companies.map((c) => c.name || c.cin);
   const parts: string[] = [
-    `${names.join(", ")} — 공개 웹 정보 기반 ${companies.length}개 기업 비교입니다.`,
+    `${names.join(", ")} — 주력 제품·인도 거점·규모·최근 투자를 중심으로 한 공개 정보 비교입니다.`,
   ];
 
-  const withWeb = companies.filter((c) => c.webEnrichment.rawSnippets.length > 0).length;
-  parts.push(`${withWeb}/${companies.length}개 기업에서 웹 검색 결과를 확보했습니다.`);
-
-  const withWebsite = companies.filter((c) => c.webEnrichment.website);
-  if (withWebsite.length > 0) {
-    parts.push(`웹사이트 확인: ${withWebsite.map((c) => c.name).join(", ")}.`);
+  const withProducts = companies.filter(
+    (c) => c.webEnrichment.products.length + c.webEnrichment.services.length > 0 || c.webEnrichment.businessDescription
+  );
+  if (withProducts.length > 0) {
+    parts.push(`사업 내용 확인: ${withProducts.map((c) => c.name || c.cin).join(", ")}.`);
   }
 
-  const withRevenue = companies.filter((c) => c.webEnrichment.revenue);
-  if (withRevenue.length > 0) {
-    parts.push(
-      `공개 매출 정보: ${withRevenue.map((c) => `${c.name} - ${c.webEnrichment.revenue}`).join("; ")}.`
-    );
+  const withIndia = companies.filter(
+    (c) => c.webEnrichment.indiaOpsSnippets.length > 0 || c.registeredOffice.address
+  );
+  if (withIndia.length > 0) {
+    parts.push(`인도 거점 언급: ${withIndia.map((c) => c.name || c.cin).join(", ")}.`);
   }
 
-  const states = [...new Set(companies.map((c) => c.cinParsed.stateName).filter(Boolean))];
-  if (states.length > 0) {
-    parts.push(`관련 주(State): ${states.join(", ")}.`);
+  const withScale = companies.filter(
+    (c) => c.webEnrichment.revenue || c.webEnrichment.employees || c.paidUpCapitalInr > 0
+  );
+  if (withScale.length > 0) {
+    parts.push(`규모 정보 확인: ${withScale.map((c) => c.name || c.cin).join(", ")}.`);
+  }
+
+  const missing = companies.filter(
+    (c) =>
+      !c.webEnrichment.businessDescription &&
+      c.webEnrichment.products.length === 0 &&
+      !c.webEnrichment.revenue &&
+      !c.webEnrichment.employees
+  );
+  if (missing.length > 0) {
+    parts.push(`확인 불가 항목이 많은 기업: ${missing.map((c) => c.name || c.cin).join(", ")}.`);
   }
 
   return parts.join(" ");
 }
 
 export function buildComparisonFields(companies: CompanyProfile[]): ComparisonField[] {
+  const orMissing = (value: string | null | undefined) => value?.trim() || "확인 불가";
+
   return [
     { label: "회사명", key: "name", values: companies.map((c) => c.name || c.cin) },
     { label: "CIN", key: "cin", values: companies.map((c) => c.cin) },
-    { label: "요약", key: "summary", values: companies.map((c) => c.summary || "—") },
-    { label: "사업 내용", key: "business", values: companies.map((c) => c.webEnrichment.businessDescription || c.industry || "—") },
-    { label: "상태 (웹)", key: "status", values: companies.map((c) => c.status) },
-    { label: "업종", key: "industry", values: companies.map((c) => c.industry || c.cinParsed.industryDescription || "—") },
-    { label: "등록 주", key: "state", values: companies.map((c) => c.cinParsed.stateName || "—") },
-    { label: "설립일", key: "dateOfIncorporation", values: companies.map((c) => c.dateOfIncorporation || String(c.cinParsed.yearOfIncorporation) || "—") },
-    { label: "웹사이트", key: "website", values: companies.map((c) => c.webEnrichment.website || "—") },
-    { label: "이메일", key: "webEmail", values: companies.map((c) => c.webEnrichment.email || c.email || "—") },
-    { label: "전화번호", key: "phone", values: companies.map((c) => c.webEnrichment.phone || "—") },
-    { label: "주소", key: "webAddress", values: companies.map((c) => c.webEnrichment.address || c.registeredOffice.address || "—") },
-    { label: "매출 (웹)", key: "revenue", values: companies.map((c) => c.webEnrichment.revenue || "—") },
-    { label: "직원 수", key: "employees", values: companies.map((c) => c.webEnrichment.employees || "—") },
-    { label: "등기이사", key: "directors", values: companies.map((c) => c.directors.map((d) => d.name).join(", ") || "—") },
-    { label: "웹 검색 결과", key: "snippets", values: companies.map((c) => `${c.webEnrichment.rawSnippets.length}건`) },
-    { label: "관련 링크", key: "links", values: companies.map((c) => `${c.webEnrichment.relatedLinks.length}건`) },
+    {
+      label: "주력 제품·서비스",
+      key: "products",
+      values: companies.map((c) => {
+        const items = [...c.webEnrichment.products, ...c.webEnrichment.services].slice(0, 5);
+        return items.length > 0
+          ? items.join(", ")
+          : orMissing(c.webEnrichment.businessDescription || c.industry);
+      }),
+    },
+    {
+      label: "인도 거점",
+      key: "indiaFootprint",
+      values: companies.map((c) =>
+        orMissing(
+          c.webEnrichment.indiaOpsSnippets[0]?.text ||
+            c.registeredOffice.address ||
+            c.webEnrichment.address ||
+            c.cinParsed.stateName
+        )
+      ),
+    },
+    {
+      label: "생산·공장 언급",
+      key: "factory",
+      values: companies.map((c) => {
+        const hit = c.webEnrichment.indiaOpsSnippets.find((s) =>
+          /factory|plant|manufactur|공장|생산/i.test(s.text)
+        );
+        return orMissing(hit?.text);
+      }),
+    },
+    {
+      label: "고객·산업",
+      key: "customers",
+      values: companies.map((c) =>
+        orMissing(
+          c.webEnrichment.relationSnippets.find((s) => /customer|client|supplier|partner/i.test(s.text))
+            ?.text || c.webEnrichment.businessDescription
+        )
+      ),
+    },
+    {
+      label: "공개 기업 규모",
+      key: "scale",
+      values: companies.map((c) => {
+        const parts: string[] = [];
+        if (c.webEnrichment.revenue) {
+          parts.push(`매출 ${c.webEnrichment.revenue}${c.webEnrichment.revenueYear ? ` (${c.webEnrichment.revenueYear})` : ""}`);
+        }
+        if (c.webEnrichment.employees) parts.push(`직원 ${c.webEnrichment.employees}`);
+        if (c.paidUpCapitalInr > 0) parts.push(`납입자본 ₹${c.paidUpCapitalInr.toLocaleString("en-IN")}`);
+        return parts.length > 0 ? parts.join(" · ") : "확인 불가";
+      }),
+    },
+    {
+      label: "최근 투자·동향",
+      key: "investment",
+      values: companies.map((c) => orMissing(c.webEnrichment.newsItems[0]?.text)),
+    },
+    {
+      label: "관계사",
+      key: "connected",
+      values: companies.map((c) =>
+        c.connectedCompanies.length > 0
+          ? c.connectedCompanies.map((item) => item.name).join(", ")
+          : "확인 불가"
+      ),
+    },
+    { label: "웹사이트", key: "website", values: companies.map((c) => c.webEnrichment.website || "확인 불가") },
+    { label: "상태", key: "status", values: companies.map((c) => (c.status !== "Unknown" ? c.status : "확인 불가")) },
+    {
+      label: "등기이사",
+      key: "directors",
+      values: companies.map((c) => c.directors.map((d) => d.name).join(", ") || "확인 불가"),
+    },
   ];
 }

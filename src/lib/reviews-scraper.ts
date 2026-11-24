@@ -181,9 +181,9 @@ export function commentsFromSearchResults(
 
 export async function fetchSnsComments(companyName: string): Promise<PublicComment[]> {
   const queries = [
-    `"${companyName}" reviews comments feedback India`,
-    `"${companyName}" employee reviews glassdoor OR mouthshut OR justdial India`,
-    `"${companyName}" google reviews ratings India`,
+    `"${companyName}" employee review OR "worst company" OR "good place to work" India`,
+    `"${companyName}" site:ambitionbox.com/reviews OR site:mouthshut.com OR site:glassdoor.co.in`,
+    `"${companyName}" "pros" "cons" review rating India`,
   ];
 
   const comments: PublicComment[] = [];
@@ -298,8 +298,9 @@ export async function fetchWebsiteReviews(
 
 export async function fetchWebReviewSnippets(companyName: string): Promise<WebsiteReview[]> {
   const queries = [
-    `"${companyName}" customer reviews India`,
-    `"${companyName}" ratings reviews site:justdial.com OR site:mouthshut.com`,
+    `"${companyName}" customer reviews OR employee reviews India`,
+    `"${companyName}" ratings reviews site:justdial.com OR site:mouthshut.com OR site:ambitionbox.com`,
+    `"${companyName}" "I work" OR "worked at" OR "rude" OR "recommend" review`,
   ];
 
   const reviews: WebsiteReview[] = [];
