@@ -1,3 +1,5 @@
+import { textMentionsCompany } from "./company-match";
+
 const FOREIGN_SITE_PATTERNS = [
   /baidu\.com/i,
   /baike\./i,
@@ -79,14 +81,12 @@ export function isRelevantSearchResult(result: {
 
 export function isUsefulCommentText(text: string, companyName?: string): boolean {
   const decoded = sanitizeWebText(text);
-  if (!isReadableLatinText(decoded)) return false;
+  if (!isReadableLatinText(decoded) && !/[가-힣]{6,}/.test(decoded)) return false;
   if (BOILERPLATE_PATTERNS.test(decoded)) return false;
   if (decoded.length < 25) return false;
+  if (companyName && !textMentionsCompany(decoded, companyName)) return false;
 
-  if (companyName) {
-    const token = companyName.split(/\s+/)[0]?.toLowerCase();
-    if (token && token.length > 2 && decoded.toLowerCase().includes(token)) return true;
-  }
-
-  return /review|rating|employee|customer|recommend|experience|service|company|india/i.test(decoded);
+  return /review|rating|employee|customer|recommend|experience|service|company|india|회계|세무|법인/i.test(
+    decoded
+  );
 }

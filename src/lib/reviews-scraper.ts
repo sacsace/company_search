@@ -1,24 +1,15 @@
 import type { PublicComment, WebsiteReview } from "./types";
+import {
+  detectPlatformFromUrl,
+  isCompanyRelevantResult,
+  textMentionsCompany,
+} from "./company-match";
 import { searchWeb } from "./search-engine";
 import { isReadableLatinText, isRelevantSearchResult, isUsefulCommentText, sanitizeWebText } from "./text-utils";
 import { isSafeOutboundUrl } from "./security-utils";
 
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-
-const PLATFORM_FROM_URL: { pattern: RegExp; name: string }[] = [
-  { pattern: /linkedin\.com/i, name: "LinkedIn" },
-  { pattern: /(?:twitter|x)\.com/i, name: "Twitter/X" },
-  { pattern: /facebook\.com/i, name: "Facebook" },
-  { pattern: /instagram\.com/i, name: "Instagram" },
-  { pattern: /youtube\.com/i, name: "YouTube" },
-  { pattern: /reddit\.com/i, name: "Reddit" },
-  { pattern: /mouthshut\.com/i, name: "MouthShut" },
-  { pattern: /justdial\.com/i, name: "JustDial" },
-  { pattern: /glassdoor/i, name: "Glassdoor" },
-  { pattern: /trustpilot/i, name: "Trustpilot" },
-  { pattern: /google\.com\/maps/i, name: "Google Maps" },
-];
 
 async function fetchText(url: string): Promise<string | null> {
   if (!isSafeOutboundUrl(url)) return null;
@@ -46,26 +37,52 @@ function htmlToText(html: string): string {
   );
 }
 
-function detectPlatform(url: string): string {
-  for (const { pattern, name } of PLATFORM_FROM_URL) {
-    if (pattern.test(url)) return name;
+function detectPlatform(url: string, context = ""): string {
+  const fromUrl = detectPlatformFromUrl(url);
+  const blob = `${context} ${url}`;
+  // 공유·검색 미러 URL에 리뷰 플랫폼명이 섞여도 원문 도메인 우선
+  if (/ambitionbox\.com/i.test(url)) return "AmbitionBox";
+  if (/glassdoor\.(com|co\.in)/i.test(url)) return "Glassdoor";
+  if (/mouthshut\.com/i.test(url)) return "MouthShut";
+  // Twitter/Facebook에 AmbitionBox 설명만 걸린 경우 → 리뷰 원문으로 취급하지 않음
+  if (
+    /(?:twitter|x)\.com|facebook\.com|t\.co\//i.test(url) &&
+    /ambitionbox|glassdoor|mouthshut/i.test(blob)
+  ) {
+    return fromUrl;
   }
-  return "Web";
+  return fromUrl;
 }
 
 function extractRating(text: string): string | null {
-  const patterns = [
-    /(\d(?:\.\d)?)\s*\/\s*5/,
-    /(\d(?:\.\d)?)\s*out of\s*5/i,
-    /([★⭐]{1,5})/,
-    /(\d(?:\.\d)?)\s*stars?/i,
-    /rated\s*(\d(?:\.\d)?)/i,
-  ];
-  for (const p of patterns) {
-    const m = text.match(p);
-    if (m) return m[1] ?? m[0];
+  // "1 Reviews" / "리뷰 1개" 를 평점 1.0으로 오인하지 않음 — 척도가 있는 패턴만 허용
+  const scale = text.match(/(\d(?:\.\d)?)\s*\/\s*5|(\d(?:\.\d)?)\s*out of\s*5/i);
+  if (scale) {
+    const num = parseFloat(scale[1] || scale[2]);
+    if (num >= 1 && num <= 5) return String(num);
+  }
+  const glyphs = text.match(/([★⭐]{1,5})/);
+  if (glyphs) return String(glyphs[1].length);
+
+  const labeled = text.match(/(?:overall\s+)?(?:rating|rated|score)\s*[:\s]*(\d(?:\.\d)?)/i);
+  if (labeled) {
+    const num = parseFloat(labeled[1]);
+    if (num >= 1 && num <= 5) return String(num);
+  }
+
+  const stars = text.match(/(\d(?:\.\d)?)\s*stars?\b/i);
+  if (stars && !/\b\d[\d,]*\s*reviews?\b/i.test(text.slice(Math.max(0, stars.index! - 8), stars.index! + 20))) {
+    const num = parseFloat(stars[1]);
+    if (num >= 1 && num <= 5) return String(num);
   }
   return null;
+}
+
+function isReviewAggregatorShare(url: string, text: string): boolean {
+  return (
+    /(?:twitter|x)\.com|facebook\.com|t\.co\/|linkedin\.com\/posts/i.test(url) &&
+    /ambitionbox|glassdoor|mouthshut|indeed\.com\/cmp/i.test(`${url} ${text}`)
+  );
 }
 
 function extractSearchResults(html: string): { title: string; url: string; snippet: string }[] {
@@ -99,15 +116,11 @@ function snippetToComment(
   const text = result.snippet.trim();
   if (text.length < 20 || text.length > 500) return null;
 
-  const companyWord = companyName.split(" ")[0].toLowerCase();
-  const lowerText = text.toLowerCase();
-  const isRelevant =
-    lowerText.includes(companyWord) ||
-    isReviewLikeText(`${result.title} ${text}`);
+  if (!isCompanyRelevantResult(result, companyName)) return null;
+  if (!isReviewLikeText(`${result.title} ${text}`)) return null;
+  if (isReviewAggregatorShare(result.url, `${result.title} ${text}`)) return null;
 
-  if (!isRelevant) return null;
-
-  const platform = detectPlatform(result.url);
+  const platform = detectPlatform(result.url, `${result.title} ${text}`);
   const rating = extractRating(text);
 
   let author: string | null = null;
@@ -133,7 +146,8 @@ function isReviewLikeText(text: string): boolean {
 }
 
 export function commentsFromReviewSearch(
-  results: { title: string; url: string; snippet: string }[]
+  results: { title: string; url: string; snippet: string }[],
+  companyName?: string
 ): PublicComment[] {
   const comments: PublicComment[] = [];
   const seen = new Set<string>();
@@ -141,14 +155,16 @@ export function commentsFromReviewSearch(
   for (const result of results) {
     const text = result.snippet.trim();
     if (text.length < 20) continue;
+    if (companyName && !isCompanyRelevantResult(result, companyName)) continue;
     if (!isReviewLikeText(`${result.title} ${text}`)) continue;
-    if (!isUsefulCommentText(text, undefined)) continue;
+    if (!isUsefulCommentText(text, companyName)) continue;
+    if (isReviewAggregatorShare(result.url, `${result.title} ${text}`)) continue;
     const key = text.substring(0, 80);
     if (seen.has(key)) continue;
     seen.add(key);
 
     comments.push({
-      platform: detectPlatform(result.url),
+      platform: detectPlatform(result.url, `${result.title} ${text}`),
       author: null,
       text,
       date: null,
@@ -195,8 +211,9 @@ export async function fetchSnsComments(companyName: string): Promise<PublicComme
     for (const result of results) {
       if (!isRelevantSearchResult(result)) continue;
     }
-    for (const comment of commentsFromReviewSearch(results)) {
+    for (const comment of commentsFromReviewSearch(results, companyName)) {
       if (!isUsefulCommentText(comment.text, companyName)) continue;
+      if (!textMentionsCompany(`${comment.text} ${comment.url}`, companyName)) continue;
       const key = comment.text.substring(0, 80);
       if (seen.has(key)) continue;
       seen.add(key);
@@ -312,6 +329,7 @@ export async function fetchWebReviewSnippets(companyName: string): Promise<Websi
     for (const result of results) {
       const text = result.snippet.trim();
       if (text.length < 30) continue;
+      if (!isCompanyRelevantResult(result, companyName)) continue;
       if (!/review|rating|star|recommend|experience|feedback|customer/i.test(text)) continue;
       if (seen.has(text)) continue;
       seen.add(text);

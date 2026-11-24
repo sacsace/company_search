@@ -1,4 +1,5 @@
 import type { EmployeeReview } from "./types";
+import { isSameCompany, strongCompanyTokens, textMentionsCompany } from "./company-match";
 import { searchWeb } from "./search-engine";
 import { isSafeOutboundUrl } from "./security-utils";
 
@@ -58,11 +59,21 @@ async function fetchHtml(url: string): Promise<string | null> {
   }
 }
 
+function ambitionBoxUrlMatchesCompany(url: string, companyName: string): boolean {
+  const slugPart = url.match(/ambitionbox\.com\/reviews\/([a-z0-9-]+)-reviews/i)?.[1] ?? "";
+  const slugAsName = slugPart.replace(/-/g, " ");
+  if (isSameCompany(companyName, slugAsName, 0.5)) return true;
+  const strong = strongCompanyTokens(companyName);
+  return strong.length > 0 && strong.every((token) => slugPart.includes(token));
+}
+
 export async function findAmbitionBoxReviewsUrl(companyName: string): Promise<string | null> {
   const results = await searchWeb(`"${companyName}" site:ambitionbox.com/reviews`, 5);
   for (const result of results) {
     const match = result.url.match(/ambitionbox\.com\/reviews\/[a-z0-9-]+-reviews/i);
-    if (match) return result.url.split("?")[0];
+    if (!match) continue;
+    const clean = result.url.split("?")[0];
+    if (ambitionBoxUrlMatchesCompany(clean, companyName)) return clean;
   }
 
   const slug = companyToSlug(companyName);
@@ -158,7 +169,13 @@ export async function fetchAmbitionBoxReviews(companyName: string): Promise<{
 
   const html = await fetchHtml(pageUrl);
   if (!html) {
+    // 페이지 URL은 찾았으나 원문 접근 실패 — 평점/리뷰를 추정하지 않음
     return { reviews: [], pageUrl, companyRating: null, reviewCount: null };
+  }
+
+  const title = html.match(/<title>([^<]+)<\/title>/i)?.[1] ?? "";
+  if (title && !textMentionsCompany(title, companyName) && !ambitionBoxUrlMatchesCompany(pageUrl, companyName)) {
+    return { reviews: [], pageUrl: null, companyRating: null, reviewCount: null };
   }
 
   const parsed = parseReviewsFromHtml(html, pageUrl);

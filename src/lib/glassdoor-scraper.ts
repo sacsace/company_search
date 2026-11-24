@@ -1,4 +1,5 @@
 import type { EmployeeReview } from "./types";
+import { companyMatchScore, isSameCompany, textMentionsCompany } from "./company-match";
 import { searchWeb, type WebSearchResult } from "./search-engine";
 import { isSafeOutboundUrl } from "./security-utils";
 
@@ -36,11 +37,7 @@ function companyToTokens(name: string): string[] {
 }
 
 function namesMatch(companyName: string, candidate: string): boolean {
-  const left = companyToTokens(companyName);
-  const right = new Set(companyToTokens(candidate));
-  if (left.length === 0 || right.size === 0) return false;
-  const overlap = left.filter((token) => right.has(token)).length;
-  return overlap / left.length >= 0.6;
+  return isSameCompany(companyName, candidate, 0.55);
 }
 
 function parseCompactCount(raw: string | undefined): number | null {
@@ -301,8 +298,18 @@ async function fetchFromWebSearch(companyName: string): Promise<{
     const parsed = parseRatingFromSnippet(text);
     if (!parsed.rating) continue;
 
+    const candidateName = result.title.replace(/\s*[-|].*$/, "").trim() || "";
+    // 타사(예: MESINDUS) 평점을 검색 대상에 붙이지 않음
+    if (
+      candidateName &&
+      !namesMatch(companyName, candidateName) &&
+      !textMentionsCompany(`${result.title} ${result.snippet} ${result.url}`, companyName)
+    ) {
+      continue;
+    }
+
     const candidate: ParsedGlassdoorCompany = {
-      name: result.title.replace(/\s*[-|].*$/, "").trim() || companyName,
+      name: candidateName || companyName,
       rating: parsed.rating,
       reviewCount: parsed.reviewCount,
       jobs: null,
@@ -310,7 +317,13 @@ async function fetchFromWebSearch(companyName: string): Promise<{
       url: url || buildGlassdoorSearchUrl(companyName),
     };
 
-    if (!best || (candidate.reviewCount ?? 0) > (best.reviewCount ?? 0)) {
+    const better =
+      !best ||
+      companyMatchScore(companyName, candidate.name) > companyMatchScore(companyName, best.name) ||
+      (namesMatch(companyName, candidate.name) &&
+        (candidate.reviewCount ?? 0) > (best.reviewCount ?? 0));
+
+    if (better && namesMatch(companyName, candidate.name)) {
       best = candidate;
     }
   }
@@ -340,21 +353,31 @@ export async function fetchGlassdoorReviews(companyName: string): Promise<Glassd
     fetchFromWebSearch(companyName),
   ]);
 
-  const company = fromSearch.company ?? fromWeb.company;
+  const companyCandidates = [fromSearch.company, fromWeb.company].filter(
+    (item): item is ParsedGlassdoorCompany => !!item && namesMatch(companyName, item.name)
+  );
+  const company =
+    companyCandidates.sort(
+      (a, b) => companyMatchScore(companyName, b.name) - companyMatchScore(companyName, a.name)
+    )[0] ?? null;
+
   const snippets = [...fromSearch.snippets, ...fromWeb.snippets]
+    .filter((text) => textMentionsCompany(text, companyName) || namesMatch(companyName, text.slice(0, 80)))
     .filter((text, index, arr) => arr.findIndex((item) => item.slice(0, 60) === text.slice(0, 60)) === index)
     .slice(0, 6);
   const pageUrl = company
     ? buildReviewsUrlFromOverview(company.url, company.name)
     : null;
 
-  const reviews = reviewsFromSnippets(snippets, pageUrl ?? company?.url ?? null, companyName);
+  const reviews = company
+    ? reviewsFromSnippets(snippets, pageUrl ?? company.url, companyName)
+    : [];
 
   return {
     rating: company?.rating ?? null,
     reviewCount: company?.reviewCount ?? null,
     companyName: company?.name ?? null,
-    pageUrl: pageUrl ?? company?.url ?? searchUrl,
+    pageUrl: company ? pageUrl ?? company.url : null,
     searchUrl,
     googleSearchUrl,
     snippets,

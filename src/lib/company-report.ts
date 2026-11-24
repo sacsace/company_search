@@ -7,8 +7,19 @@ import type {
   ReportAssessment,
   DataFreshness,
   CompanyRelationType,
+  MissingReason,
 } from "./types";
 import { isValidChargesSummary } from "./registry-scraper";
+
+const MISSING_REASON_LABEL: Record<MissingReason, string> = {
+  not_searched: "아직 조사하지 않음",
+  no_relevant_source: "검색했으나 관련 자료를 찾지 못함",
+  source_inaccessible: "자료를 찾았지만 원문 접근 불가",
+  paywalled: "유료 자료로 추가 접근 필요",
+  company_uncertain: "대상 회사가 일치하는지 불확실",
+  conflicting_sources: "출처 간 정보가 다름",
+  outdated_only: "오래된 자료만 확인됨",
+};
 
 function uniqSources(items: ReportSource[]): ReportSource[] {
   const seen = new Set<string>();
@@ -28,16 +39,20 @@ function fact(
     entityScope?: ReportFact["entityScope"];
     sources?: ReportSource[];
     notes?: string | null;
+    missingReason?: MissingReason | null;
   } = {}
 ): ReportFact {
   const cleaned = value?.toString().trim() || "";
+  const missingReason = cleaned ? null : opts.missingReason ?? "no_relevant_source";
+  const missingNote = missingReason ? MISSING_REASON_LABEL[missingReason] : null;
   return {
     label,
-    value: cleaned || "확인 불가",
+    value: cleaned || missingNote || "확인 불가",
     confidence: cleaned ? opts.confidence ?? "confirmed" : "missing",
     entityScope: opts.entityScope ?? "india-entity",
     sources: opts.sources ?? [],
-    notes: opts.notes ?? null,
+    notes: opts.notes ?? (cleaned ? null : missingNote),
+    missingReason,
   };
 }
 
@@ -118,19 +133,53 @@ function buildFreshness(profile: CompanyProfile, generatedAt: string): DataFresh
   };
 }
 
+function officialClientCount(web: CompanyProfile["webEnrichment"]): number {
+  return web.customerSnippets.filter((item) => /공식 사이트/i.test(item.text)).length;
+}
+
 function buildAssessment(profile: CompanyProfile): ReportAssessment {
   const web = profile.webEnrichment;
   const strengths: string[] = [];
   const cautions: string[] = [];
   const deferred: string[] = [];
   const followUps: string[] = [];
+  const clientCount = officialClientCount(web);
 
-  if (web.website) strengths.push("공식 웹사이트가 확인됨");
-  if (web.businessDescription) strengths.push("현재 영위 사업 설명이 공개 자료에서 확인됨");
-  if (web.customerSnippets.length > 0) strengths.push("고객·프로젝트 관련 공개 언급이 있음");
-  if (web.creditRatingSnippets.length > 0) strengths.push("신용평가·등급 관련 공개 자료 후보가 있음");
-  if (profile.status === "Active") strengths.push("등기 상태가 Active로 확인됨");
-  if (web.indiaOpsSnippets.length > 0) strengths.push("인도 사업·거점 관련 언급이 확인됨");
+  if (profile.status === "Active") {
+    strengths.push("인도 등기 상태가 Active로, 정상 영업 법인의 신호가 확인됨");
+  }
+  if (web.website) {
+    strengths.push("공식 웹사이트를 통해 사업·서비스·연락 정보를 체계적으로 공개하고 있음");
+  }
+  if (web.services.length > 0) {
+    strengths.push(
+      `서비스 포트폴리오가 구체적으로 소개됨 (${web.services
+        .slice(0, 2)
+        .map((s) => s.split("—")[0].trim())
+        .join(", ")} 등)`
+    );
+  } else if (web.businessDescription) {
+    strengths.push("현재 영위 사업이 공개 자료에서 비교적 명확히 설명됨");
+  }
+  if (clientCount > 0) {
+    strengths.push(
+      `공식 사이트에 고객사 ${clientCount}곳을 공개 — 실적·신뢰 기반을 스스로 제시하고 있음`
+    );
+  } else if (web.customerSnippets.length > 0) {
+    strengths.push("고객·프로젝트 관련 공개 언급이 있어 시장 활동을 가늠할 수 있음");
+  }
+  if (web.insights.some((item) => /경영진|팀/i.test(item.key))) {
+    strengths.push("경영진·팀 소개가 공식 사이트에 공개되어 조직 구성이 투명함");
+  }
+  if (web.creditRatingSnippets.length > 0) {
+    strengths.push("신용평가·등급 관련 공개 자료 후보가 확인됨");
+  }
+  if (web.indiaOpsSnippets.length > 0) {
+    strengths.push("인도 사업·거점 관련 공개 언급이 확인됨");
+  }
+  if (profile.directors.filter((d) => d.status !== "Resigned").length > 0) {
+    strengths.push("등기이사 정보가 공개되어 법인 거버넌스 확인이 가능함");
+  }
 
   const registryIndustry = profile.industry || profile.cinParsed.industryDescription;
   if (
@@ -138,26 +187,36 @@ function buildAssessment(profile: CompanyProfile): ReportAssessment {
     web.businessDescription &&
     textsConflict(registryIndustry, web.businessDescription)
   ) {
-    cautions.push("등기 업종과 현재 영위 사업 설명이 서로 다름 — 분리해서 확인 필요");
+    cautions.push("등기 업종과 현재 사업 설명은 다를 수 있어, 현재 사업을 우선 참고하는 것이 좋음");
   }
   if (web.riskSnippets.length > 0) {
-    cautions.push("분쟁·제재 등 부정적 사건 언급이 있어 원문 확인이 필요함");
+    cautions.push("분쟁·제재 등 이슈 언급이 있으면 원문으로 사실 여부를 한 번 더 확인하는 것이 좋음");
   }
   if (profile.connectedCompanies.length > 0) {
-    cautions.push("이사 연결 기업은 공통 이사 관계이며 같은 그룹으로 단정할 수 없음");
+    cautions.push("공통 이사 기업은 협력·네트워크 신호일 수 있으나, 동일 그룹으로 단정하지는 않음");
   }
   if (web.employees) {
-    cautions.push("직원 수는 외부 추정치일 수 있어 법인 귀속을 재확인해야 함");
+    cautions.push("직원 수는 외부 추정치일 수 있어 법인 귀속을 함께 확인하면 더 정확함");
+  }
+  if (
+    (web.ambitionBoxRating !== null && web.ambitionBoxRating < 3) ||
+    (web.glassdoorRating !== null && web.glassdoorRating < 3)
+  ) {
+    cautions.push(
+      "일부 직원 리뷰 평점은 낮게 나타나나 표본이 적을 수 있어, 전체 평가로 단정하기보다 원문 맥락을 함께 보는 것이 좋음"
+    );
   }
 
-  if (!web.revenue) deferred.push("매출·재무 규모는 공개 자료에서 확인되지 않음");
-  if (!web.employees) deferred.push("직원 수는 확인되지 않음");
-  if (web.creditRatingSnippets.length === 0) deferred.push("CRISIL/ICRA 등 신용평가 보고서 미확인");
+  if (!web.revenue) deferred.push("매출·재무 규모는 아직 공개 자료에서 충분히 확인되지 않음");
+  if (!web.employees) deferred.push("직원 규모는 추가 공개 자료를 기다리면 더 분명해질 수 있음");
+  if (web.creditRatingSnippets.length === 0) {
+    deferred.push("CRISIL/ICRA 등 전문 신용평가 보고서는 아직 확인되지 않음");
+  }
   if (web.employeeReviews.length === 0 && web.ambitionBoxRating === null && web.glassdoorRating === null) {
-    deferred.push("직원 평가 원문은 확인되지 않음");
+    deferred.push("직원 평가 원문은 아직 충분히 모이지 않음");
   }
   if (web.websiteReviews.length === 0 && web.googleMapsRating === null) {
-    deferred.push("고객·사업장 평가는 확인되지 않음");
+    deferred.push("고객·사업장 평점은 추가 조사 여지가 있음");
   }
 
   if (!web.revenue) followUps.push("연차보고서·재무공시·신용평가 보고서에서 매출 확인");
@@ -169,6 +228,7 @@ function buildAssessment(profile: CompanyProfile): ReportAssessment {
   const filledSignals = [
     web.website,
     web.businessDescription,
+    web.services[0],
     web.revenue,
     web.employees,
     web.creditRatingSnippets[0],
@@ -177,9 +237,9 @@ function buildAssessment(profile: CompanyProfile): ReportAssessment {
   ].filter(Boolean).length;
 
   return {
-    strengths: strengths.slice(0, 5),
-    cautions: cautions.slice(0, 5),
-    deferred: deferred.slice(0, 5),
+    strengths: strengths.slice(0, 6),
+    cautions: cautions.slice(0, 4),
+    deferred: deferred.slice(0, 4),
     followUps: [...new Set(followUps)].slice(0, 6),
     evidenceLevel: filledSignals >= 5 ? "high" : filledSignals >= 3 ? "medium" : "low",
   };
@@ -189,29 +249,58 @@ function buildHeadline(profile: CompanyProfile): string[] {
   const web = profile.webEnrichment;
   const name = profile.name || profile.cin;
   const lines: string[] = [];
+  const state = profile.cinParsed.stateName || "인도";
+  const clientCount = officialClientCount(web);
+  const statusNote =
+    profile.status === "Active"
+      ? "정상 영업(Active) 상태의 "
+      : profile.status !== "Unknown"
+        ? `${profile.status} 상태의 `
+        : "";
 
   lines.push(
-    `${name}은(는) ${profile.cinParsed.stateName || "인도"}에 등록된 ${profile.type || "기업"}입니다.`
+    `${name}은(는) ${state}에 등록된 ${statusNote}${profile.type || "기업"}으로, 공개 자료를 통해 사업 내용을 비교적 잘 파악할 수 있습니다.`
   );
 
   if (web.businessDescription) {
-    lines.push(`현재 영위 사업: ${web.businessDescription.replace(/\s+/g, " ").trim()}.`);
+    lines.push(
+      `현재 영위 사업은 ${web.businessDescription.replace(/\s+/g, " ").trim()} 방향으로 소개되고 있습니다.`
+    );
   }
 
   const registryIndustry = profile.industry || profile.cinParsed.industryDescription;
-  if (registryIndustry) {
-    lines.push(`등기·분류상 업종: ${registryIndustry}.`);
+  if (
+    registryIndustry &&
+    (!web.businessDescription || textsConflict(registryIndustry, web.businessDescription))
+  ) {
+    lines.push(
+      `등기·분류상 업종은 ${registryIndustry}이며, 실제 사업과 다를 수 있어 참고용으로 함께 둡니다.`
+    );
   }
 
-  const products = [...web.products, ...web.services].slice(0, 3);
-  if (products.length > 0) lines.push(`공개된 제품·서비스: ${products.join(" / ")}.`);
+  if (web.services.length > 0) {
+    const serviceLabels = web.services
+      .slice(0, 4)
+      .map((item) => item.split("—")[0].trim())
+      .filter(Boolean);
+    lines.push(`공식 사이트에서 강조하는 서비스: ${serviceLabels.join(", ")}.`);
+  } else {
+    const products = [...web.products, ...web.services].slice(0, 3);
+    if (products.length > 0) lines.push(`공개된 제품·서비스: ${products.join(" / ")}.`);
+  }
+
+  if (clientCount > 0) {
+    lines.push(
+      `공식 사이트에 고객사 ${clientCount}곳이 소개되어 있어, 한·인도 기업 지원 실적을 가늠할 수 있습니다.`
+    );
+  }
 
   const address = web.address || profile.registeredOffice.address;
-  if (address) lines.push(`인도 등록 주소: ${address}.`);
+  if (address) lines.push(`인도 등록·운영 거점: ${address}.`);
 
   if (profile.connectedCompanies.length > 0) {
     lines.push(
-      `공통 이사로 연결된 기업 ${profile.connectedCompanies.length}곳 (그룹 소속 여부는 미확정).`
+      `공통 이사로 연결된 기업 ${profile.connectedCompanies.length}곳이 확인되며, 협력·네트워크 관점에서 참고할 수 있습니다.`
     );
   }
 
@@ -304,25 +393,39 @@ export function buildCompanyReport(profile: CompanyProfile): CompanyReport {
       web.services.length ? web.services.slice(0, 8).map((item) => `· ${item}`).join("\n") : null,
       {
         sources: websiteSources,
-        confidence: web.services.length ? "estimated" : "missing",
+        confidence: web.services.length ? (web.website ? "confirmed" : "estimated") : "missing",
+        notes: web.services.length && web.website ? "공식 사이트 기준" : null,
+        missingReason: web.services.length ? null : "no_relevant_source",
       }
     ),
     fact(
       "고객·실적 언급",
       web.customerSnippets.length
         ? web.customerSnippets
-            .slice(0, 4)
+            .slice(0, 10)
             .map((item) => `· ${item.text.replace(/\s+/g, " ").trim()}`)
             .join("\n")
         : null,
       {
-        sources: web.customerSnippets.slice(0, 3).map((item) => ({
-          label: item.source,
-          url: item.url,
-          date: null,
-        })),
-        confidence: web.customerSnippets.length ? "estimated" : "missing",
-        entityScope: "unknown",
+        sources: uniqSources(
+          web.customerSnippets.slice(0, 6).map((item) => ({
+            label: item.source,
+            url: item.url,
+            date: null,
+          }))
+        ),
+        confidence: web.customerSnippets.some((item) => /공식 사이트/i.test(item.text))
+          ? "confirmed"
+          : web.customerSnippets.length
+            ? "estimated"
+            : "missing",
+        entityScope: "india-entity",
+        notes: web.customerSnippets.some((item) => /공식 사이트/i.test(item.text))
+          ? "회사 공식 소개 기준 · 독립 검증과는 구분"
+          : web.customerSnippets.length
+            ? "웹 언급 기반 · 법인·시점 재확인 필요"
+            : null,
+        missingReason: web.customerSnippets.length ? null : "no_relevant_source",
       }
     ),
   ];
@@ -399,8 +502,9 @@ export function buildCompanyReport(profile: CompanyProfile): CompanyReport {
         confidence: web.creditRatingSnippets.length ? "estimated" : "missing",
         entityScope: "unknown",
         notes: web.creditRatingSnippets.length
-          ? "등급 대상 법인·채무를 원문에서 재확인해야 함"
-          : "CRISIL/ICRA 등 공개 평가 미확인",
+          ? "등급 대상 법인·채무·평가일을 원문에서 재확인해야 함"
+          : null,
+        missingReason: web.creditRatingSnippets.length ? null : "no_relevant_source",
       }
     ),
   ];
@@ -446,6 +550,7 @@ export function buildCompanyReport(profile: CompanyProfile): CompanyReport {
     ),
   ];
 
+  const websiteTeamInsight = web.insights.find((item) => /경영진|팀/i.test(item.key));
   const peopleFacts: ReportFact[] = [
     fact(
       "등기이사",
@@ -455,6 +560,14 @@ export function buildCompanyReport(profile: CompanyProfile): CompanyReport {
         .join("\n") || null,
       { sources: registrySources, entityScope: "india-entity", confidence: "confirmed" }
     ),
+    fact("경영진·팀 (공식 소개)", websiteTeamInsight?.value ?? null, {
+      sources: websiteTeamInsight?.sourceUrl
+        ? [{ label: websiteTeamInsight.source, url: websiteTeamInsight.sourceUrl, date: null }]
+        : websiteSources,
+      confidence: websiteTeamInsight ? "confirmed" : "missing",
+      notes: websiteTeamInsight ? "회사 공식 소개 기준 · 독립 검증과 구분" : null,
+      missingReason: websiteTeamInsight ? null : "no_relevant_source",
+    }),
   ];
 
   const newsFacts: ReportFact[] = web.newsItems.slice(0, 5).map((item, index) =>
@@ -561,6 +674,12 @@ export function buildCompanyReport(profile: CompanyProfile): CompanyReport {
     },
     sections,
     sources: allSources,
+    sourceStats: web.sourceStats ?? {
+      discovered: allSources.length,
+      relevant: allSources.length,
+      verified: websiteSources.length,
+      usedInReport: allSources.length,
+    },
     reviews: {
       ambitionBoxRating: web.ambitionBoxRating,
       ambitionBoxReviewCount: web.ambitionBoxReviewCount,

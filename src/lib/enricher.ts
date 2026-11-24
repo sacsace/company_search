@@ -6,6 +6,12 @@ import { fetchWebsiteReviews, fetchSnsComments, fetchWebReviewSnippets, comments
 import { parseBusinessActivity, parseDirectorsFromText } from "./registry-scraper";
 import { buildGoogleSearchUrl, searchWeb, type WebSearchResult } from "./search-engine";
 import { isSafeOutboundUrl } from "./security-utils";
+import {
+  isCompanyRelevantResult,
+  isSameCompany,
+  isValidCreditRatingSnippet,
+  textMentionsCompany,
+} from "./company-match";
 import { hasCjkText, isForeignSiteUrl, isReadableLatinText, isRelevantSearchResult, isUsableBusinessText, isUsefulCommentText, sanitizeWebText } from "./text-utils";
 
 const USER_AGENT =
@@ -182,7 +188,27 @@ function extractLinks(html: string, baseUrl: string): string[] {
 
 function findInternalPages(links: string[], baseUrl: string): string[] {
   const base = new URL(baseUrl);
-  const keywords = ["about", "contact", "team", "leadership", "product", "service", "company", "who-we-are", "testimonial", "review", "feedback", "customer"];
+  const keywords: { kw: string; score: number }[] = [
+    { kw: "about", score: 3 },
+    { kw: "service", score: 4 },
+    { kw: "product", score: 3 },
+    { kw: "client", score: 5 },
+    { kw: "customer", score: 5 },
+    { kw: "portfolio", score: 4 },
+    { kw: "project", score: 3 },
+    { kw: "case", score: 3 },
+    { kw: "team", score: 4 },
+    { kw: "leadership", score: 3 },
+    { kw: "people", score: 2 },
+    { kw: "contact", score: 3 },
+    { kw: "company", score: 2 },
+    { kw: "who-we-are", score: 3 },
+    { kw: "testimonial", score: 3 },
+    { kw: "download", score: 2 },
+    { kw: "brochure", score: 2 },
+    { kw: "pdf", score: 1 },
+    { kw: "news", score: 2 },
+  ];
   const scored: { url: string; score: number }[] = [];
 
   for (const link of links) {
@@ -191,10 +217,10 @@ function findInternalPages(links: string[], baseUrl: string): string[] {
       if (u.hostname !== base.hostname) continue;
       const path = u.pathname.toLowerCase();
       let score = 0;
-      for (const kw of keywords) {
-        if (path.includes(kw)) score += 2;
+      for (const { kw, score: points } of keywords) {
+        if (path.includes(kw)) score += points;
       }
-      if (score > 0) scored.push({ url: link, score });
+      if (score > 0) scored.push({ url: link.split("#")[0], score });
     } catch {
       // skip
     }
@@ -204,7 +230,118 @@ function findInternalPages(links: string[], baseUrl: string): string[] {
     .sort((a, b) => b.score - a.score)
     .map((s) => s.url)
     .filter((url, i, arr) => arr.indexOf(url) === i)
-    .slice(0, 4);
+    .slice(0, 8);
+}
+
+function normalizeClientAlt(raw: string): string | null {
+  const name = raw
+    .replace(/&amp;/g, "&")
+    .replace(/\s+/g, " ")
+    .replace(/\s*(로고|logo)\s*$/i, "")
+    .trim();
+  if (name.length < 2 || name.length > 50) return null;
+  if (/minsub|msv\b|our (?:logo|brand)|favicon|icon/i.test(name)) return null;
+  return name;
+}
+
+function extractClientNamesFromHtml(html: string, text: string): string[] {
+  const clients: string[] = [];
+
+  // SPA 고객 로고: <img src=".../uploads/clients/..." alt="GS건설 로고">
+  for (const match of html.matchAll(/<img\b[^>]*>/gi)) {
+    const tag = match[0];
+    if (!/uploads\/clients|\/clients\//i.test(tag)) continue;
+    const alt = tag.match(/\balt=["']([^"']+)["']/i)?.[1];
+    const name = alt ? normalizeClientAlt(alt) : null;
+    if (name) clients.push(name);
+  }
+
+  for (const match of html.matchAll(/\balt=["']([^"']{2,80})["']/gi)) {
+    const raw = match[1];
+    if (!/로고|logo/i.test(raw)) continue;
+    const nearby = html.slice(Math.max(0, match.index! - 120), match.index! + raw.length + 80);
+    if (!/uploads\/clients|\/clients\//i.test(nearby)) continue;
+    const name = normalizeClientAlt(raw);
+    if (name) clients.push(name);
+  }
+
+  const section = text.match(
+    /(?:our clients?|clientele|customers?|partners?)[:\s]+([\s\S]{40,800}?)(?:(?:our |contact|service|about)|$)/i
+  );
+  const blob = section?.[1] ?? "";
+  const patterns = [
+    /\b([A-Z][A-Za-z0-9&.\- ]{2,40}(?:Private Limited|Pvt\.?\s*Ltd\.?|Limited|Ltd\.?|LLP))\b/g,
+    /\b([A-Z][A-Za-z0-9&.\- ]{2,30})\s*\((?:IT|Manufacturing|Finance|Healthcare|Retail|Logistics|Education|Automotive|Hospitality)[^)]*\)/g,
+  ];
+  for (const pattern of patterns) {
+    let match;
+    while ((match = pattern.exec(blob)) !== null) {
+      const name = match[1].replace(/\s+/g, " ").trim();
+      if (name.length < 3 || name.length > 60) continue;
+      if (/cookie|privacy|terms|contact us|learn more/i.test(name)) continue;
+      clients.push(name);
+      if (clients.length >= 20) break;
+    }
+  }
+
+  return [...new Set(clients)].slice(0, 15);
+}
+
+/** 공식 사이트 h2/h3 + 설명문에서 서비스 추출 (한·영 SPA 대응) */
+function extractWebsiteServices(html: string, text: string): string[] {
+  const services: string[] = [];
+  const serviceHint =
+    /accounting|tax|bookkeep|incorporat|frro|erp|hr\b|payroll|visa|trade|export|import|hotel|real estate|부동산|회계|세무|법인|인허가|무역|채용|비자|설립|서비스/i;
+
+  for (const match of html.matchAll(
+    /<h([23])[^>]*>\s*([^<]{2,70})\s*<\/h\1>\s*(?:<p[^>]*>\s*([^<]{15,220})\s*<\/p>)?/gi
+  )) {
+    const title = match[2].replace(/\s+/g, " ").trim();
+    const body = (match[3] || "").replace(/\s+/g, " ").trim();
+    if (!serviceHint.test(`${title} ${body}`)) continue;
+    if (/cookie|privacy|terms|contact us|follow us/i.test(title)) continue;
+    services.push(body ? `${title} — ${body}`.slice(0, 200) : title);
+  }
+
+  // 짧은 서비스 라벨 (탭/카드)
+  for (const match of html.matchAll(
+    /<(?:span|div|li|button)[^>]*>\s*((?:Accounting|Tax|Bookkeeping|Incorporation|FRRO|ERP|HR|Trade|Hotel|Real Estate|회계|세무|법인설립|무역)[^<]{0,40})\s*<\/(?:span|div|li|button)>/gi
+  )) {
+    const label = match[1].replace(/\s+/g, " ").trim();
+    if (label.length >= 2 && label.length <= 60) services.push(label);
+  }
+
+  if (services.length === 0) {
+    return summarizeOfferingLines(text, [
+      "services",
+      "our services",
+      "solutions",
+      "offerings",
+      "what we do",
+      "서비스",
+    ]);
+  }
+  return [...new Set(services)].slice(0, 8);
+}
+
+function extractTeamNamesFromHtml(html: string): string[] {
+  const names: string[] = [];
+  for (const match of html.matchAll(/\/team\/([a-z0-9\-]+)\.(?:png|jpe?g|webp)/gi)) {
+    const slug = match[1].replace(/-hero$/i, "");
+    if (/logo|icon|banner|og-image/i.test(slug)) continue;
+    const name = slug
+      .split("-")
+      .filter(Boolean)
+      .map((part) => (part.length <= 3 ? part.toUpperCase() : part.charAt(0).toUpperCase() + part.slice(1)))
+      .join(" ");
+    if (name.length >= 3) names.push(name);
+  }
+  for (const match of html.matchAll(
+    /<(?:h[23]|p|span)[^>]*>\s*((?:CA|Mr|Ms|Dr)\.?\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})\s*<\/(?:h[23]|p|span)>/g
+  )) {
+    names.push(match[1].replace(/\s+/g, " ").trim());
+  }
+  return [...new Set(names)].slice(0, 8);
 }
 
 function extractSocialLinks(html: string): WebLink[] {
@@ -492,15 +629,66 @@ async function crawlWebsite(websiteUrl: string): Promise<{
   const pages: { url: string; title: string }[] = [{ url: websiteUrl, title: "Homepage" }];
   const allSocial = extractSocialLinks(homepage);
 
-  const internalLinks = findInternalPages(extractLinks(homepage, websiteUrl), websiteUrl);
+  const discovered = findInternalPages(extractLinks(homepage, websiteUrl), websiteUrl);
+  const guessedPaths = [
+    "/about",
+    "/about-us",
+    "/about/team",
+    "/team",
+    "/services",
+    "/service",
+    "/products",
+    "/clients",
+    "/client",
+    "/customers",
+    "/portfolio",
+    "/contact",
+    "/contact-us",
+  ];
+  const guessed = guessedPaths
+    .map((path) => {
+      try {
+        return new URL(path, websiteUrl).href;
+      } catch {
+        return null;
+      }
+    })
+    .filter((url): url is string => !!url);
+
+  const internalLinks = [...new Set([...discovered, ...guessed])].slice(0, 12);
   for (const pageUrl of internalLinks) {
+    if (pages.some((page) => page.url === pageUrl)) continue;
     const html = await fetchText(pageUrl);
     if (!html) continue;
+    // SPA: 경로 GET이 404여도 홈 HTML에 섹션이 임베드된 경우가 많음
+    if ((/page not found|404|does not exist/i.test(html) && html.length < 4000) || html.length < 800) {
+      continue;
+    }
     combinedHtml += " " + html;
     combinedText += " " + htmlToText(html);
-    const title = extractMeta(html, "og:title") ?? pageUrl.split("/").pop() ?? "Page";
+    const title =
+      extractMeta(html, "og:title") ??
+      html.match(/<title>([^<]+)<\/title>/i)?.[1]?.trim() ??
+      pageUrl.split("/").filter(Boolean).pop() ??
+      "Page";
     pages.push({ url: pageUrl, title });
     allSocial.push(...extractSocialLinks(html));
+  }
+
+  // 홈페이지에 메뉴 링크만 있고 하위 경로가 404인 SPA: 섹션 존재를 페이지 목록에 표시
+  const spaSectionHints: { path: RegExp; title: string }[] = [
+    { path: /\/about\/?$/i, title: "About (홈 내장)" },
+    { path: /\/services/i, title: "Services (홈 내장)" },
+    { path: /\/(?:about\/)?clients?/i, title: "Clients (홈 내장)" },
+    { path: /\/(?:about\/)?team/i, title: "Team (홈 내장)" },
+    { path: /\/contact/i, title: "Contact (홈 내장)" },
+  ];
+  for (const hint of spaSectionHints) {
+    const linked = discovered.find((url) => hint.path.test(url));
+    if (!linked) continue;
+    if (pages.some((page) => page.url === linked || page.title === hint.title)) continue;
+    if (!hint.path.test(linked) && !hint.path.test(homepage)) continue;
+    pages.push({ url: linked, title: hint.title });
   }
 
   const emails = extractEmails(combinedHtml);
@@ -709,6 +897,7 @@ export async function enrichFromWeb(
 
   for (const result of mainResults) {
     if (isBlacklisted(result.url) || !isRelevantSearchResult(result)) continue;
+    if (!isCompanyRelevantResult(result, companyName)) continue;
     combinedText += " " + result.snippet;
     rawSnippets.push({ text: result.snippet, source: result.title, url: result.url });
     relatedLinks.push({ label: result.title, url: result.url, type: "source" });
@@ -729,6 +918,7 @@ export async function enrichFromWeb(
 
   for (const result of expandedBuckets) {
     if (isBlacklisted(result.url) || !isRelevantSearchResult(result)) continue;
+    if (!isCompanyRelevantResult(result, companyName)) continue;
     combinedText += " " + result.snippet;
     rawSnippets.push({ text: result.snippet, source: result.title, url: result.url });
     relatedLinks.push({ label: result.title, url: result.url, type: "source" });
@@ -737,7 +927,13 @@ export async function enrichFromWeb(
 
   const toSnippets = (results: typeof mainResults) =>
     results
-      .filter((result) => !isBlacklisted(result.url) && isRelevantSearchResult(result) && result.snippet.trim())
+      .filter(
+        (result) =>
+          !isBlacklisted(result.url) &&
+          isRelevantSearchResult(result) &&
+          result.snippet.trim() &&
+          isCompanyRelevantResult(result, companyName)
+      )
       .map((result) => ({
         text: result.snippet.trim(),
         source: result.title,
@@ -747,7 +943,9 @@ export async function enrichFromWeb(
   const newsItems = toSnippets(newsResults).slice(0, 6);
   const indiaOpsSnippets = toSnippets([...indiaResults, ...koreanResults]).slice(0, 6);
   const relationSnippets = toSnippets(relationResults).slice(0, 6);
-  const creditRatingSnippets = toSnippets(creditResults).slice(0, 5);
+  const creditRatingSnippets = toSnippets(creditResults)
+    .filter((item) => isValidCreditRatingSnippet(`${item.source} ${item.text}`, companyName))
+    .slice(0, 5);
   const customerSnippets = toSnippets(customerResults).slice(0, 5);
   const riskSnippets = toSnippets(
     [...newsResults, ...mainResults].filter((result) =>
@@ -853,14 +1051,41 @@ export async function enrichFromWeb(
       ? actualBusinessRaw.replace(/\s+/g, " ").trim().slice(0, 420)
       : null;
 
-  const products = summarizeOfferingLines(combinedText, ["products", "product range", "our products"]);
-  const services = summarizeOfferingLines(combinedText, [
-    "services",
-    "our services",
-    "solutions",
-    "offerings",
-    "what we do",
-  ]);
+  const products = summarizeOfferingLines(
+    websiteData.text || combinedText,
+    ["products", "product range", "our products"]
+  );
+  const services = extractWebsiteServices(websiteData.html || "", websiteData.text || combinedText);
+  const websiteClients = extractClientNamesFromHtml(websiteData.html || "", websiteData.text || "").filter(
+    (client) => !isSameCompany(companyName, client, 0.5)
+  );
+  if (websiteClients.length > 0) {
+    const clientPage =
+      websiteData.pages.find((page) => /client|customer|portfolio/i.test(page.url))?.url ||
+      website ||
+      "";
+    for (const client of websiteClients.slice(0, 10)) {
+      customerSnippets.unshift({
+        text: `공식 사이트 공개 고객사: ${client}`,
+        source: "공식 웹사이트 고객·실적",
+        url: clientPage,
+      });
+    }
+    sources.push("Company Website Clients");
+  }
+
+  const websiteTeam = extractTeamNamesFromHtml(websiteData.html || "");
+  if (websiteTeam.length > 0) {
+    insights.push({
+      key: "경영진·팀 (공식 소개)",
+      value: websiteTeam.join(", "),
+      source: "Company Website",
+      sourceUrl: website ?? undefined,
+    });
+    deepSearchNotes.push(
+      `공식 사이트 팀 소개 ${websiteTeam.length}명 확인(회사 공식 소개 기준, 독립 검증과 구분)`
+    );
+  }
 
   const addressMatch = combinedText.match(
     /(?:address|registered office|head\s*office|location)[:\s]+([A-Za-z0-9\s,.#/-]{15,150}?(?:India|IN-\d{6}|\d{6}))/i
@@ -949,12 +1174,13 @@ export async function enrichFromWeb(
   ]);
 
   const mergedComments = [
-    ...commentsFromReviewSearch(googleReviewResults),
-    ...commentsFromReviewSearch(reviewLikeMain),
-    ...commentsFromReviewSearch(snsResults),
+    ...commentsFromReviewSearch(googleReviewResults, companyName),
+    ...commentsFromReviewSearch(reviewLikeMain, companyName),
+    ...commentsFromReviewSearch(snsResults, companyName),
     ...snsFetched,
   ].filter((c) => !/infyner|qorpiq|indiafilings|zaubacorp|mca\.gov/i.test(c.url))
-    .filter((c) => isUsefulCommentText(c.text, companyName));
+    .filter((c) => isUsefulCommentText(c.text, companyName))
+    .filter((c) => textMentionsCompany(`${c.text} ${c.url}`, companyName));
 
   const commentSeen = new Set<string>();
   for (const comment of mergedComments) {
@@ -994,55 +1220,73 @@ export async function enrichFromWeb(
       type: "source",
     });
   }
-  if (glassdoorData.rating !== null || glassdoorData.snippets.length > 0) {
+  const glassdoorMatched =
+    !!glassdoorData.companyName && isSameCompany(companyName, glassdoorData.companyName, 0.55);
+
+  if (glassdoorMatched && (glassdoorData.rating !== null || glassdoorData.snippets.length > 0)) {
     sources.push("Glassdoor");
-    relatedLinks.push({
-      label: "Glassdoor",
-      url: glassdoorData.pageUrl ?? glassdoorData.searchUrl,
-      type: "source",
-    });
+    if (glassdoorData.pageUrl) {
+      relatedLinks.push({
+        label: `Glassdoor - ${glassdoorData.companyName}`,
+        url: glassdoorData.pageUrl,
+        type: "source",
+      });
+    }
   }
 
   const employeeReviews = [
     ...ambitionBoxData.reviews.slice(0, 10),
-    ...glassdoorData.reviews.slice(0, 5),
+    ...(glassdoorMatched ? glassdoorData.reviews.slice(0, 5) : []),
   ];
 
   const reviewSearchStatus: WebEnrichment["reviewSearchStatus"] = [
     {
       platform: "AmbitionBox",
       status:
-        ambitionBoxData.companyRating !== null || ambitionBoxData.reviews.length > 0
+        ambitionBoxData.reviews.length > 0
           ? "found"
-          : ambitionBoxData.pageUrl
-            ? "not_found"
-            : "blocked",
+          : ambitionBoxData.companyRating !== null
+            ? "found"
+            : ambitionBoxData.pageUrl
+              ? "snippet_only"
+              : "not_found",
       detail:
-        ambitionBoxData.companyRating !== null
-          ? `평점 ${ambitionBoxData.companyRating}`
-          : ambitionBoxData.pageUrl
-            ? "페이지는 찾았으나 리뷰 없음"
-            : "검색·접근 실패 또는 결과 없음",
+        ambitionBoxData.reviews.length > 0
+          ? `원문 확인 · 리뷰 ${ambitionBoxData.reviews.length}건${
+              ambitionBoxData.companyRating !== null ? ` · 평점 ${ambitionBoxData.companyRating}/5` : ""
+            }`
+          : ambitionBoxData.companyRating !== null
+            ? `페이지 확인 · 평점 ${ambitionBoxData.companyRating}/5 · 리뷰 본문 없음`
+            : ambitionBoxData.pageUrl
+              ? "리뷰 존재 언급 확인. 원문 접근 불가로 평점·내용 미검증"
+              : "검색했으나 관련 자료를 찾지 못함",
     },
     {
       platform: "Glassdoor",
       status:
-        glassdoorData.rating !== null || glassdoorData.reviews.length > 0 || glassdoorData.snippets.length > 0
+        glassdoorMatched && glassdoorData.rating !== null
           ? "found"
-          : "not_found",
-      detail:
-        glassdoorData.rating !== null
-          ? `평점 ${glassdoorData.rating}`
-          : glassdoorData.snippets.length > 0
-            ? `스니펫 ${glassdoorData.snippets.length}건`
-            : "검색했으나 확인된 리뷰 없음",
+          : glassdoorMatched
+            ? "snippet_only"
+            : glassdoorData.companyName
+              ? "not_found"
+              : "not_found",
+      detail: glassdoorMatched
+        ? glassdoorData.rating !== null
+          ? `대상 ${glassdoorData.companyName} · 평점 ${glassdoorData.rating}/5${
+              glassdoorData.reviewCount !== null ? ` · 리뷰 ${glassdoorData.reviewCount}건` : ""
+            }`
+          : "동일 회사 후보 확인 · 원문 접근 불가로 평점 미검증"
+        : glassdoorData.companyName
+          ? `다른 회사 후보(${glassdoorData.companyName})는 제외 · 자동 반영하지 않음`
+          : "검색했으나 동일 회사 리뷰 미확인",
     },
     {
       platform: "Google Maps",
       status: googleMapsData?.rating != null ? "found" : "not_found",
       detail:
         googleMapsData?.rating != null
-          ? `평점 ${googleMapsData.rating}`
+          ? `평점 ${googleMapsData.rating}/5`
           : "검색했으나 사업장 평점 미확인",
     },
   ];
@@ -1070,6 +1314,7 @@ export async function enrichFromWeb(
       const followResults = (await Promise.all(followUps)).flat();
       for (const result of followResults) {
         if (isBlacklisted(result.url) || !isRelevantSearchResult(result)) continue;
+        if (!isCompanyRelevantResult(result, companyName)) continue;
         combinedText += " " + result.snippet;
         rawSnippets.push({ text: result.snippet, source: result.title, url: result.url });
         relatedLinks.push({ label: result.title, url: result.url, type: "source" });
@@ -1104,6 +1349,25 @@ export async function enrichFromWeb(
       arr.findIndex((l) => l.url === link.url) === i && !isForeignSiteUrl(link.url)
   );
 
+  const discoveredPageCount =
+    mainResults.length +
+    expandedBuckets.length +
+    linkedInResults.length +
+    googleReviewResults.length +
+    snsResults.length +
+    websiteData.pages.length;
+  const relevantPageCount = uniqueLinks.length + websiteData.pages.length;
+  const verifiedPageCount =
+    (website ? 1 : 0) +
+    websiteData.pages.filter((page) => !/홈 내장/i.test(page.title)).length +
+    (ambitionBoxData.reviews.length > 0 ? 1 : 0) +
+    (glassdoorMatched && glassdoorData.pageUrl ? 1 : 0) +
+    (googleMapsData ? 1 : 0);
+  const usedInReportCount = Math.min(
+    relevantPageCount,
+    uniqueLinks.slice(0, 20).length + (website ? 1 : 0) + websiteClients.length
+  );
+
   return {
     website,
     revenue: finalRevenue,
@@ -1135,20 +1399,26 @@ export async function enrichFromWeb(
     googleMapsRating: googleMapsData?.rating ?? null,
     googleMapsReviewCount: googleMapsData?.reviewCount ?? null,
     googleMapsUrl: googleMapsData?.mapsUrl ?? null,
-    glassdoorRating: glassdoorData.rating,
-    glassdoorReviewCount: glassdoorData.reviewCount,
-    glassdoorUrl: glassdoorData.pageUrl ?? glassdoorData.searchUrl,
+    glassdoorRating: glassdoorMatched ? glassdoorData.rating : null,
+    glassdoorReviewCount: glassdoorMatched ? glassdoorData.reviewCount : null,
+    glassdoorUrl: glassdoorMatched ? glassdoorData.pageUrl : null,
     glassdoorGoogleSearchUrl: glassdoorData.googleSearchUrl,
-    glassdoorSnippets: glassdoorData.snippets.slice(0, 6),
+    glassdoorSnippets: glassdoorMatched ? glassdoorData.snippets.slice(0, 6) : [],
     discoveredDirectors,
     newsItems,
     indiaOpsSnippets,
     relationSnippets,
     riskSnippets,
     creditRatingSnippets,
-    customerSnippets,
+    customerSnippets: customerSnippets.slice(0, 12),
     reviewSearchStatus,
     deepSearchNotes,
+    sourceStats: {
+      discovered: discoveredPageCount,
+      relevant: relevantPageCount,
+      verified: verifiedPageCount,
+      usedInReport: usedInReportCount,
+    },
   };
 }
 

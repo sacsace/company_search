@@ -58,6 +58,8 @@ export interface WebSnippet {
   url: string;
 }
 
+export type VerificationLevel = "full_text" | "search_snippet" | "inaccessible";
+
 export interface PublicComment {
   platform: string;
   author: string | null;
@@ -65,6 +67,7 @@ export interface PublicComment {
   date: string | null;
   url: string;
   rating: string | null;
+  verificationLevel?: VerificationLevel;
 }
 
 export interface WebsiteReview {
@@ -136,16 +139,27 @@ export interface WebEnrichment {
   customerSnippets: WebSnippet[];
   reviewSearchStatus: ReviewSearchStatus[];
   deepSearchNotes: string[];
+  sourceStats: SourceQualityStats;
 }
 
 export interface ReviewSearchStatus {
   platform: string;
-  status: "found" | "not_found" | "blocked" | "error";
+  status: "found" | "not_found" | "blocked" | "error" | "snippet_only";
   detail: string | null;
 }
 
 export type FactConfidence = "confirmed" | "estimated" | "conflict" | "missing";
 export type EntityScope = "india-entity" | "parent" | "group" | "shared-director" | "unknown";
+
+/** 정보 없음·미확인을 후속 조사용으로 구분 */
+export type MissingReason =
+  | "not_searched"
+  | "no_relevant_source"
+  | "source_inaccessible"
+  | "paywalled"
+  | "company_uncertain"
+  | "conflicting_sources"
+  | "outdated_only";
 
 export interface ReportSource {
   label: string;
@@ -160,6 +174,14 @@ export interface ReportFact {
   entityScope: EntityScope;
   sources: ReportSource[];
   notes: string | null;
+  missingReason?: MissingReason | null;
+}
+
+export interface SourceQualityStats {
+  discovered: number;
+  relevant: number;
+  verified: number;
+  usedInReport: number;
 }
 
 export interface ReportSection {
@@ -200,6 +222,7 @@ export interface CompanyReport {
   };
   sections: ReportSection[];
   sources: ReportSource[];
+  sourceStats: SourceQualityStats;
   reviews: {
     ambitionBoxRating: number | null;
     ambitionBoxReviewCount: number | null;

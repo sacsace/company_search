@@ -25,12 +25,19 @@ export function generateCompanySummary(profile: CompanyProfile): string {
   const web = profile.webEnrichment;
   const displayName = profile.name || profile.cin;
 
+  const statusLabel =
+    profile.status === "Active"
+      ? "정상 영업(Active)"
+      : profile.status && profile.status !== "Unknown"
+        ? profile.status
+        : null;
+
   parts.push(
-    `${displayName}(CIN: ${profile.cin})은(는) 인도에 등록된 ${profile.type || "기업"}입니다.`
+    `${displayName}(CIN: ${profile.cin})은(는) 인도에 등록된 ${profile.type || "기업"}으로, 공개 자료를 바탕으로 사업 개요를 정리한 결과입니다.`
   );
 
-  if (profile.status && profile.status !== "Unknown") {
-    parts.push(`현재 등록 상태는 ${profile.status}입니다.`);
+  if (statusLabel) {
+    parts.push(`현재 등록 상태는 ${statusLabel}입니다.`);
   }
 
   const business =
@@ -39,9 +46,24 @@ export function generateCompanySummary(profile: CompanyProfile): string {
       ? profile.industry
       : profile.cinParsed.industryDescription);
   if (business) {
-    parts.push(`주요 사업: ${business.replace(/\s+/g, " ").trim()}.`);
+    parts.push(`주요 사업은 ${business.replace(/\s+/g, " ").trim()} 쪽으로 소개되고 있습니다.`);
   } else if (web.description) {
     parts.push(web.description);
+  }
+
+  if (web.services.length > 0) {
+    const labels = web.services
+      .slice(0, 4)
+      .map((item) => item.split("—")[0].trim())
+      .filter(Boolean);
+    parts.push(`공식·공개 자료에서 확인되는 서비스: ${labels.join(", ")}.`);
+  }
+
+  const officialClients = web.customerSnippets.filter((s) => /공식 사이트/i.test(s.text));
+  if (officialClients.length > 0) {
+    parts.push(
+      `공식 사이트에 고객사 ${officialClients.length}곳이 공개되어 있어, 시장에서의 활동 범위를 가늠하기 좋습니다.`
+    );
   }
 
   const directorNames = formatDirectorNames(profile);
@@ -80,15 +102,17 @@ export function generateCompanySummary(profile: CompanyProfile): string {
 
   if (web.snsComments.length > 0 || web.websiteReviews.length > 0 || web.employeeReviews.length > 0 || web.glassdoorRating !== null) {
     const reviewCount = web.snsComments.length + web.websiteReviews.length + web.employeeReviews.length;
-    parts.push(`온라인 댓글·리뷰 ${reviewCount}건을 수집했습니다.`);
+    parts.push(`온라인에서 참고할 수 있는 댓글·리뷰 ${reviewCount}건을 함께 모았습니다.`);
     if (web.glassdoorRating !== null) {
       parts.push(
-        `Glassdoor 평점 ${web.glassdoorRating.toFixed(1)}점${web.glassdoorReviewCount !== null ? ` (${web.glassdoorReviewCount}건)` : ""}.`
+        `Glassdoor 평점 ${web.glassdoorRating.toFixed(1)}점${web.glassdoorReviewCount !== null ? ` (${web.glassdoorReviewCount}건)` : ""} — 표본과 시점을 함께 보시면 좋습니다.`
       );
     }
     if (web.employeeReviews.some((r) => r.platform === "AmbitionBox")) {
       const ambitionCount = web.employeeReviews.filter((r) => r.platform === "AmbitionBox").length;
-      parts.push(`AmbitionBox 직원 리뷰 ${ambitionCount}건 포함.`);
+      parts.push(
+        `AmbitionBox 직원 리뷰 ${ambitionCount}건이 포함되어 있으며, 표본이 적을 경우 참고 의견으로 보시면 됩니다.`
+      );
     }
   }
 

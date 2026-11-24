@@ -28,6 +28,16 @@ const SCOPE_LABEL: Record<ReportFact["entityScope"], string> = {
   unknown: "법인 미확정",
 };
 
+function uniqSourcesForDisplay(sources: ReportFact["sources"]) {
+  const seen = new Set<string>();
+  return sources.filter((source) => {
+    const key = `${source.label}|${source.url || ""}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function FactRow({ item }: { item: ReportFact }) {
   return (
     <div className="border-b border-neutral-100 py-3 last:border-0">
@@ -46,23 +56,28 @@ function FactRow({ item }: { item: ReportFact }) {
       {item.notes && <p className="mt-1 text-[11px] text-neutral-500">{item.notes}</p>}
       {item.sources.length > 0 && (
         <div className="mt-1 flex flex-wrap gap-2">
-          {item.sources.slice(0, 3).map((source) =>
-            source.url ? (
-              <a
-                key={`${source.label}-${source.url}`}
-                href={source.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-[11px] font-semibold text-blue-700 underline"
-              >
-                {source.label.slice(0, 40)}
-              </a>
-            ) : (
-              <span key={source.label} className="text-[11px] font-semibold text-neutral-500">
-                {source.label}
-              </span>
-            )
-          )}
+          {uniqSourcesForDisplay(item.sources)
+            .slice(0, 3)
+            .map((source, index) =>
+              source.url ? (
+                <a
+                  key={`${index}-${source.label}-${source.url}`}
+                  href={source.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[11px] font-semibold text-blue-700 underline"
+                >
+                  {source.label.slice(0, 40)}
+                </a>
+              ) : (
+                <span
+                  key={`${index}-${source.label}`}
+                  className="text-[11px] font-semibold text-neutral-500"
+                >
+                  {source.label}
+                </span>
+              )
+            )}
         </div>
       )}
     </div>
@@ -298,13 +313,13 @@ export function CompanyReport({
             <div className="rounded border border-neutral-200 p-3">
               <p className="text-[11px] font-bold uppercase tracking-wide text-neutral-400">평가 요약</p>
               <p className="mt-1 text-[11px] font-semibold text-neutral-500">
-                근거 충분성:{" "}
+                공개 자료 충실도:{" "}
                 {report.assessment.evidenceLevel === "high"
-                  ? "높음"
+                  ? "풍부함"
                   : report.assessment.evidenceLevel === "medium"
-                    ? "보통"
-                    : "낮음"}{" "}
-                (점수 아님)
+                    ? "양호"
+                    : "보완 중"}{" "}
+                (투자 점수 아님)
               </p>
               <div className="mt-2 space-y-2 text-xs leading-relaxed text-neutral-700">
                 <p className="whitespace-pre-line">
@@ -312,21 +327,21 @@ export function CompanyReport({
                   {"\n"}
                   {report.assessment.strengths.length
                     ? report.assessment.strengths.map((item) => `· ${item}`).join("\n")
-                    : "· 확인된 강점 없음"}
+                    : "· 공개 자료 기준으로 눈에 띄는 강점 신호를 더 모으는 중입니다"}
                 </p>
                 <p className="whitespace-pre-line">
-                  <span className="font-bold text-amber-700">주의사항</span>
+                  <span className="font-bold text-amber-700">참고</span>
                   {"\n"}
                   {report.assessment.cautions.length
                     ? report.assessment.cautions.map((item) => `· ${item}`).join("\n")
-                    : "· 확인된 주의사항 없음"}
+                    : "· 특별히 덧붙일 참고 사항 없음"}
                 </p>
                 <p className="whitespace-pre-line">
-                  <span className="font-bold text-neutral-600">판단 보류</span>
+                  <span className="font-bold text-neutral-600">더 확인하면 좋은 항목</span>
                   {"\n"}
                   {report.assessment.deferred.length
                     ? report.assessment.deferred.map((item) => `· ${item}`).join("\n")
-                    : "· 해당 없음"}
+                    : "· 핵심 항목은 대체로 채워진 편입니다"}
                 </p>
               </div>
             </div>
@@ -434,12 +449,14 @@ export function CompanyReport({
                         <span>
                           · {item.platform}:{" "}
                           {item.status === "found"
-                            ? "수집됨"
-                            : item.status === "blocked"
-                              ? "접근 제한"
-                              : item.status === "error"
-                                ? "오류"
-                                : "검색했으나 확인 불가"}
+                            ? "원문 확인"
+                            : item.status === "snippet_only"
+                              ? "검색 설명만 확인"
+                              : item.status === "blocked"
+                                ? "접근 제한"
+                                : item.status === "error"
+                                  ? "오류"
+                                  : "검색했으나 확인 불가"}
                           {item.detail ? ` — ${item.detail}` : ""}
                         </span>
                         <SourceLink href={platformUrl} label="페이지 열기" />
@@ -513,9 +530,14 @@ export function CompanyReport({
       {!reviewsOnly && (
         <div className="rounded border border-neutral-200 p-3">
           <p className="text-[11px] font-bold uppercase tracking-wide text-neutral-400">출처 목록</p>
+          <p className="mt-1 text-[11px] text-neutral-500">
+            발견 {report.sourceStats.discovered} · 관련{" "}
+            {report.sourceStats.relevant} · 원문 확인 {report.sourceStats.verified} · 보고서 근거{" "}
+            {report.sourceStats.usedInReport}
+          </p>
           <ul className="mt-2 max-h-48 space-y-1 overflow-y-auto">
-            {report.sources.map((source) => (
-              <li key={`${source.label}-${source.url}`} className="text-xs text-neutral-600">
+            {uniqSourcesForDisplay(report.sources).map((source, index) => (
+              <li key={`${index}-${source.label}-${source.url}`} className="text-xs text-neutral-600">
                 {source.url ? (
                   <a href={source.url} target="_blank" rel="noopener noreferrer" className="underline">
                     {source.label}
