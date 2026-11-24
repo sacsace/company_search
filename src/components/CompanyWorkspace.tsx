@@ -58,58 +58,70 @@ export function CompanyWorkspace({ cin, initialTab = "report" }: Props) {
         mode={loading || mode === "standard" ? "report" : "deep"}
       />
 
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-neutral-200 pb-3">
+      <div className="flex items-center justify-between gap-3">
         <Link href="/" className="text-xs font-semibold text-neutral-500 hover:text-neutral-900">
           ← 검색 목록으로
         </Link>
-        <nav className="flex gap-1" aria-label="기업 상세 메뉴">
-          <button
-            type="button"
-            onClick={() => setViewTab("report")}
-            className={`rounded px-3 py-1.5 text-xs font-semibold ${
-              viewTab === "report"
-                ? "bg-neutral-900 text-white"
-                : "border border-neutral-200 text-neutral-600 hover:bg-neutral-50"
-            }`}
-          >
-            기업 요약 보고서
-          </button>
-          <button
-            type="button"
-            onClick={() => setViewTab("reviews")}
-            className={`rounded px-3 py-1.5 text-xs font-semibold ${
-              viewTab === "reviews"
-                ? "bg-neutral-900 text-white"
-                : "border border-neutral-200 text-neutral-600 hover:bg-neutral-50"
-            }`}
-          >
-            댓글 및 평가
-          </button>
-        </nav>
+        {profile && (
+          <p className="truncate text-[11px] font-semibold text-neutral-400">
+            {profile.name || profile.cin}
+          </p>
+        )}
       </div>
 
-      {error && (
-        <p className="rounded border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">
-          {error}
-        </p>
-      )}
+      <div className="overflow-hidden rounded border border-neutral-200 bg-white">
+        <div className="border-b border-neutral-200 bg-neutral-50 px-2 pt-2 sm:px-3">
+          <nav className="flex gap-1" aria-label="기업 상세 탭">
+            {(
+              [
+                ["report", "기업 요약 보고서"],
+                ["reviews", "댓글 및 평가"],
+              ] as const
+            ).map(([id, label]) => {
+              const active = viewTab === id;
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setViewTab(id)}
+                  className={`relative -mb-px border-b-2 px-4 py-2.5 text-xs font-bold transition ${
+                    active
+                      ? "border-neutral-900 text-neutral-900"
+                      : "border-transparent text-neutral-500 hover:text-neutral-800"
+                  }`}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </nav>
+        </div>
 
-      {!loading && !profile && !error && (
-        <p className="py-10 text-center text-xs text-neutral-500">표시할 기업 정보가 없습니다.</p>
-      )}
+        <div className="p-4 sm:p-5">
+          {error && (
+            <p className="mb-4 rounded border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">
+              {error}
+            </p>
+          )}
 
-      {profile && (
-        <CompanyReport
-          profile={profile}
-          onClose={() => router.push("/")}
-          researching={researching}
-          onRefresh={() => load("standard")}
-          onDeepSearch={() => load("deep")}
-          focusTab={viewTab === "reviews" ? "reviews" : "business"}
-          hideInternalNav={viewTab === "reviews"}
-          reviewsOnly={viewTab === "reviews"}
-        />
-      )}
+          {!loading && !profile && !error && (
+            <p className="py-10 text-center text-xs text-neutral-500">표시할 기업 정보가 없습니다.</p>
+          )}
+
+          {profile && (
+            <CompanyReport
+              profile={profile}
+              onClose={() => router.push("/")}
+              researching={researching}
+              onRefresh={() => load("standard")}
+              onDeepSearch={() => load("deep")}
+              focusTab={viewTab === "reviews" ? "reviews" : "business"}
+              hideInternalNav={viewTab === "reviews"}
+              reviewsOnly={viewTab === "reviews"}
+            />
+          )}
+        </div>
+      </div>
     </div>
   );
 }

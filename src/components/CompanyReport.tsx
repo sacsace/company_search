@@ -69,6 +69,20 @@ function FactRow({ item }: { item: ReportFact }) {
   );
 }
 
+function SourceLink({ href, label = "원문 보기" }: { href?: string | null; label?: string }) {
+  if (!href) return null;
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex text-[11px] font-semibold text-blue-700 underline"
+    >
+      {label}
+    </a>
+  );
+}
+
 interface Props {
   profile: CompanyProfile;
   onClose: () => void;
@@ -148,11 +162,46 @@ export function CompanyReport({
     URL.revokeObjectURL(url);
   };
 
+  const reviewItems = [
+    ...report.reviews.employeeReviews.map((review) => ({
+      kind: "직원 평가" as const,
+      platform: review.platform,
+      meta: [
+        review.rating !== null ? String(review.rating) : null,
+        review.jobProfile,
+        review.date,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+      title: review.title,
+      body: [review.likes, review.dislikes, review.workDetails].filter(Boolean).join(" · "),
+      url: review.url,
+    })),
+    ...report.reviews.websiteReviews.map((review) => ({
+      kind: "웹 리뷰" as const,
+      platform: review.source || "웹",
+      meta: [review.author, review.rating].filter(Boolean).join(" · "),
+      title: null as string | null,
+      body: review.text,
+      url: review.url,
+    })),
+    ...profile.webEnrichment.snsComments.map((comment) => ({
+      kind: "웹·SNS" as const,
+      platform: comment.platform,
+      meta: [comment.author, comment.date, comment.rating].filter(Boolean).join(" · "),
+      title: null as string | null,
+      body: comment.text,
+      url: comment.url,
+    })),
+  ].filter((item) => item.url || (item.body && item.body.length > 20));
+
   return (
-    <section className="w-full max-w-full space-y-5 rounded border border-neutral-200 bg-white p-4 sm:p-6">
+    <section className="w-full max-w-full space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="text-[11px] font-bold uppercase tracking-wide text-neutral-400">기업 요약 보고서</p>
+          <p className="text-[11px] font-bold uppercase tracking-wide text-neutral-400">
+            {reviewsOnly ? "댓글 및 평가" : "기업 요약 보고서"}
+          </p>
           <h2 className="mt-1 text-xl font-bold text-neutral-900">{report.identity.name}</h2>
           <p className="mt-1 text-xs font-semibold text-neutral-500">
             CIN {report.identity.cin}
@@ -176,42 +225,58 @@ export function CompanyReport({
             {report.freshness.lastAgmDate ? ` · AGM ${report.freshness.lastAgmDate}` : ""}
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          {onRefresh && (
+        {!reviewsOnly && (
+          <div className="flex flex-wrap gap-2">
+            {onRefresh && (
+              <button
+                type="button"
+                onClick={onRefresh}
+                disabled={researching}
+                className="rounded border border-neutral-300 px-3 py-1.5 text-xs font-semibold text-neutral-700 hover:bg-neutral-50 disabled:opacity-50"
+              >
+                {researching ? "갱신 중..." : "최신 정보 갱신"}
+              </button>
+            )}
+            {deepHandler && (
+              <button
+                type="button"
+                onClick={deepHandler}
+                disabled={researching}
+                className="rounded border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-neutral-800 disabled:opacity-50"
+              >
+                {researching ? "심층 조사 중..." : "심층 조사"}
+              </button>
+            )}
             <button
               type="button"
-              onClick={onRefresh}
-              disabled={researching}
-              className="rounded border border-neutral-300 px-3 py-1.5 text-xs font-semibold text-neutral-700 hover:bg-neutral-50 disabled:opacity-50"
+              onClick={downloadReport}
+              className="rounded border border-neutral-300 px-3 py-1.5 text-xs font-semibold text-neutral-700 hover:bg-neutral-50"
             >
-              {researching ? "갱신 중..." : "최신 정보 갱신"}
+              보고서 다운로드
             </button>
-          )}
-          {deepHandler && (
             <button
               type="button"
-              onClick={deepHandler}
-              disabled={researching}
-              className="rounded border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-neutral-800 disabled:opacity-50"
+              onClick={onClose}
+              className="rounded border border-neutral-300 px-3 py-1.5 text-xs font-semibold text-neutral-700 hover:bg-neutral-50"
             >
-              {researching ? "심층 조사 중..." : "심층 조사"}
+              닫기
             </button>
-          )}
-          <button
-            type="button"
-            onClick={downloadReport}
-            className="rounded border border-neutral-300 px-3 py-1.5 text-xs font-semibold text-neutral-700 hover:bg-neutral-50"
-          >
-            보고서 다운로드
-          </button>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded border border-neutral-300 px-3 py-1.5 text-xs font-semibold text-neutral-700 hover:bg-neutral-50"
-          >
-            닫기
-          </button>
-        </div>
+          </div>
+        )}
+        {reviewsOnly && (
+          <div className="flex flex-wrap gap-2">
+            {onRefresh && (
+              <button
+                type="button"
+                onClick={onRefresh}
+                disabled={researching}
+                className="rounded border border-neutral-300 px-3 py-1.5 text-xs font-semibold text-neutral-700 hover:bg-neutral-50 disabled:opacity-50"
+              >
+                {researching ? "갱신 중..." : "다시 수집"}
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {!reviewsOnly && (
@@ -343,14 +408,11 @@ export function CompanyReport({
 
           {(reviewsOnly || activeTab === "reviews") && (
             <div className="space-y-3">
-              {reviewsOnly && (
-                <h3 className="text-sm font-bold text-neutral-800">댓글 및 평가</h3>
-              )}
-              <div className="rounded border border-neutral-100 bg-neutral-50 p-3">
+              <div className="rounded border border-neutral-200 bg-neutral-50 p-3">
                 <p className="text-[11px] font-bold uppercase tracking-wide text-neutral-400">
                   플랫폼 검색 결과
                 </p>
-                <ul className="mt-2 space-y-1 text-xs text-neutral-700">
+                <ul className="mt-2 space-y-2 text-xs text-neutral-700">
                   {(report.reviews.searchStatus.length
                     ? report.reviews.searchStatus
                     : [
@@ -358,22 +420,35 @@ export function CompanyReport({
                         { platform: "Glassdoor", status: "not_found" as const, detail: "상태 미기록" },
                         { platform: "Google Maps", status: "not_found" as const, detail: "상태 미기록" },
                       ]
-                  ).map((item) => (
-                    <li key={item.platform}>
-                      · {item.platform}:{" "}
-                      {item.status === "found"
-                        ? "수집됨"
-                        : item.status === "blocked"
-                          ? "접근 제한"
-                          : item.status === "error"
-                            ? "오류"
-                            : "검색했으나 확인 불가"}
-                      {item.detail ? ` — ${item.detail}` : ""}
-                    </li>
-                  ))}
+                  ).map((item) => {
+                    const platformUrl =
+                      item.platform === "AmbitionBox"
+                        ? report.reviews.ambitionBoxUrl
+                        : item.platform === "Glassdoor"
+                          ? report.reviews.glassdoorUrl
+                          : item.platform === "Google Maps"
+                            ? report.reviews.googleMapsUrl
+                            : null;
+                    return (
+                      <li key={item.platform} className="flex flex-wrap items-center gap-2">
+                        <span>
+                          · {item.platform}:{" "}
+                          {item.status === "found"
+                            ? "수집됨"
+                            : item.status === "blocked"
+                              ? "접근 제한"
+                              : item.status === "error"
+                                ? "오류"
+                                : "검색했으나 확인 불가"}
+                          {item.detail ? ` — ${item.detail}` : ""}
+                        </span>
+                        <SourceLink href={platformUrl} label="페이지 열기" />
+                      </li>
+                    );
+                  })}
                 </ul>
                 <p className="mt-2 text-[11px] text-neutral-500">
-                  직원 평가와 고객·사업장 평가는 별도로 표시하며, 리뷰 내용은 작성자 의견입니다.
+                  웹에서 찾은 항목은 반드시 원문 링크로 확인할 수 있습니다. 리뷰 내용은 작성자 의견입니다.
                 </p>
               </div>
 
@@ -394,56 +469,42 @@ export function CompanyReport({
                 )}
               </div>
 
-              {[...report.reviews.employeeReviews, ...report.reviews.websiteReviews.map((review) => ({
-                platform: review.source || "웹 리뷰",
-                rating: review.rating ? Number(review.rating) || null : null,
-                title: null as string | null,
-                jobProfile: null as string | null,
-                likes: review.text,
-                dislikes: null as string | null,
-                workDetails: null as string | null,
-              }))].slice(0, 12).map((review, index) => {
-                const body = [review.likes, review.dislikes, review.workDetails].filter(Boolean).join(" · ");
-                return (
-                  <div key={`${review.platform}-${index}`} className="rounded border border-neutral-100 p-3">
+              {reviewItems.slice(0, 15).map((item, index) => (
+                <div key={`${item.platform}-${index}`} className="rounded border border-neutral-200 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <p className="text-[11px] font-semibold text-neutral-400">
-                      {review.platform}
-                      {review.rating !== null ? ` · ${review.rating}` : ""}
-                      {"jobProfile" in review && review.jobProfile ? ` · ${review.jobProfile}` : ""}
+                      {item.kind} · {item.platform}
+                      {item.meta ? ` · ${item.meta}` : ""}
                     </p>
-                    <p className="mt-1 text-sm text-neutral-800">{review.title || body || "리뷰"}</p>
-                    {review.title && body && (
-                      <p className="mt-1 text-xs text-neutral-600">{body.slice(0, 220)}</p>
-                    )}
+                    <SourceLink href={item.url} />
                   </div>
-                );
-              })}
-
-              {report.reviews.glassdoorSnippets.map((snippet) => (
-                <p key={snippet} className="text-xs text-neutral-600">
-                  {snippet}
-                </p>
-              ))}
-
-              {profile.webEnrichment.snsComments.slice(0, 8).map((comment, index) => (
-                <div key={`sns-${index}`} className="rounded border border-neutral-100 p-3">
-                  <p className="text-[11px] font-semibold text-neutral-400">
-                    {comment.platform}
-                    {comment.author ? ` · ${comment.author}` : ""}
-                    {comment.rating ? ` · ${comment.rating}` : ""}
+                  <p className="mt-1 text-sm font-semibold text-neutral-800">
+                    {item.title || item.body.slice(0, 160) || "내용 없음"}
                   </p>
-                  <p className="mt-1 text-sm text-neutral-800">{comment.text}</p>
+                  {item.title && item.body && (
+                    <p className="mt-1 text-xs leading-relaxed text-neutral-600">{item.body.slice(0, 240)}</p>
+                  )}
+                  {item.url && (
+                    <p className="mt-2 break-all text-[11px] text-neutral-400">{item.url}</p>
+                  )}
                 </div>
               ))}
 
-              {report.reviews.employeeReviews.length === 0 &&
-                report.reviews.websiteReviews.length === 0 &&
-                report.reviews.glassdoorSnippets.length === 0 &&
-                profile.webEnrichment.snsComments.length === 0 && (
-                  <p className="text-xs text-neutral-500">
-                    평가·댓글 원문은 수집되지 않았습니다. 위 플랫폼 검색 결과에서 접근·미확인 여부를 확인하세요.
-                  </p>
-                )}
+              {report.reviews.glassdoorSnippets.map((snippet, index) => (
+                <div key={`gd-snip-${index}`} className="rounded border border-neutral-100 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-[11px] font-semibold text-neutral-400">Glassdoor 스니펫</p>
+                    <SourceLink href={report.reviews.glassdoorUrl} />
+                  </div>
+                  <p className="mt-1 text-xs text-neutral-700">{snippet}</p>
+                </div>
+              ))}
+
+              {reviewItems.length === 0 && report.reviews.glassdoorSnippets.length === 0 && (
+                <p className="text-xs text-neutral-500">
+                  평가·댓글 원문은 수집되지 않았습니다. 위 플랫폼 검색 결과에서 접근·미확인 여부를 확인하세요.
+                </p>
+              )}
             </div>
           )}
         </div>
