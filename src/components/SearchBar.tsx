@@ -26,6 +26,8 @@ export function SearchBar({ onSearch, loading = false }: SearchBarProps) {
         onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
         placeholder="회사명 또는 CIN 번호 입력"
         autoComplete="off"
+        // Surfshark 등 브라우저 확장이 data-sharkid를 주입해 SSR/CSR 불일치가 날 수 있음
+        suppressHydrationWarning
         className="min-w-0 flex-1 border border-neutral-300 bg-white px-4 py-2.5 text-xs font-semibold text-neutral-900 placeholder:font-medium placeholder:text-neutral-400 focus:border-neutral-900 focus:outline-none focus:ring-1 focus:ring-neutral-900"
       />
       <button

@@ -159,7 +159,7 @@ export default function Home() {
                 검색하면 매칭된 회사 목록만 표시됩니다. 전체 보기에서 요약 보고서와 댓글·평가를 확인하세요.
               </p>
               <p className="text-[11px] font-semibold text-neutral-400">
-                예: Minsub Ventures, Samsung India, 또는 U17226KA2020PTC133195
+                예: Minsub Ventures, 또는 U17226KA2020PTC133195
               </p>
 
               <SearchResults results={results} />

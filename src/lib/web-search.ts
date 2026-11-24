@@ -184,6 +184,71 @@ async function searchDuckDuckGo(query: string): Promise<CompanySearchResult[]> {
   return extractCompaniesFromHtml(html, query);
 }
 
+/**
+ * 회사명 슬러그로 companydetails.in 직접 조회.
+ * 검색엔진 HTML 스크래핑이 막혀도 회사명 → CIN 매칭이 가능합니다.
+ */
+async function lookupByNameSlug(query: string): Promise<CompanySearchResult[]> {
+  const results: CompanySearchResult[] = [];
+  const seen = new Set<string>();
+  const candidates = buildNameSlugCandidates(query);
+
+  for (const slug of candidates) {
+    const html = await fetchHtml(`https://www.companydetails.in/company/${slug}`, 12000);
+    if (!html) continue;
+
+    const title =
+      html.match(/<title>([^<]+)<\/title>/i)?.[1]?.replace(/\s+/g, " ").trim() || "";
+    if (/page not found|404/i.test(title)) continue;
+
+    const cin =
+      html.match(
+        /(?:CIN|Corporate Identification Number)[^A-Z0-9]{0,40}([UL]\d{5}[A-Z]{2}\d{4}[A-Z]{3}\d{6})/i
+      )?.[1] ||
+      title.match(/([UL]\d{5}[A-Z]{2}\d{4}[A-Z]{3}\d{6})/i)?.[0] ||
+      html.match(/([UL]\d{5}[A-Z]{2}\d{4}[A-Z]{3}\d{6})/i)?.[0];
+
+    if (!cin) continue;
+
+    const nameFromTitle = title
+      .split(/ - | \| /)[0]
+      ?.replace(/&amp;/g, "&")
+      .trim();
+    const name =
+      (nameFromTitle && !/companydetails/i.test(nameFromTitle) ? nameFromTitle : null) ||
+      nameFromSlug(slug);
+
+    if (scoreMatch(name, query) < 20 && scoreMatch(nameFromSlug(slug), query) < 20) continue;
+
+    pushCompany(results, seen, cin.toUpperCase(), name);
+    if (results.length >= 5) break;
+  }
+
+  return results;
+}
+
+function buildNameSlugCandidates(query: string): string[] {
+  const cleaned = query
+    .trim()
+    .toLowerCase()
+    .replace(/\b(pvt\.?|private|ltd\.?|limited|llp|company|co\.?)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned) return [];
+
+  const bases = [cleaned];
+  if (!/\bindia\b/i.test(cleaned)) bases.push(`${cleaned} india`);
+
+  const slugs: string[] = [];
+  for (const base of bases) {
+    slugs.push(slugify(`${base} private limited`));
+    slugs.push(slugify(`${base} limited`));
+    slugs.push(slugify(base));
+  }
+
+  return [...new Set(slugs)].slice(0, 6);
+}
+
 async function lookupByCinOnTofler(cin: string): Promise<CompanySearchResult[]> {
   const normalizedCin = cin.toUpperCase();
   const html = await fetchHtml(`https://www.tofler.in/company/${normalizedCin}`);
@@ -214,27 +279,25 @@ async function lookupByCinOnTofler(cin: string): Promise<CompanySearchResult[]> 
 
 /** 브랜드·약칭 → 정식 법인명 후보 */
 const BRAND_ALIASES: Record<string, string[]> = {
-  "samsung india": [
-    "Samsung India Electronics Private Limited",
-    "Samsung India Electronics",
-    "Samsung R&D Institute India",
-  ],
-  samsung: ["Samsung India Electronics Private Limited", "Samsung India Electronics"],
   "lg india": ["LG Electronics India Private Limited", "LG Soft India"],
   "hyundai india": ["Hyundai Motor India Limited", "Hyundai Motor India"],
-  "msv": ["Minsub Ventures Private Limited", "Minsub Ventures"],
-  "minsub": ["Minsub Ventures Private Limited"],
+  msv: ["Minsub Ventures Private Limited", "Minsub Ventures"],
+  minsub: ["Minsub Ventures Private Limited"],
 };
 
 function expandSearchQueries(query: string): string[] {
   const trimmed = query.trim();
   const key = trimmed.toLowerCase().replace(/\s+/g, " ");
   const aliases = BRAND_ALIASES[key] ?? [];
+  const hasLegalSuffix = /\b(private|pvt|limited|ltd|llp)\b/i.test(trimmed);
+  const formal = hasLegalSuffix
+    ? [trimmed]
+    : [`${trimmed} Private Limited`, `${trimmed} Limited`];
   const withIndia =
     /\bindia\b/i.test(trimmed) || /[가-힣]/.test(trimmed)
       ? []
-      : [`${trimmed} India`, `${trimmed} Private Limited India`];
-  return [...new Set([trimmed, ...aliases, ...withIndia])].slice(0, 5);
+      : [`${trimmed} India`, `${trimmed} India Private Limited`];
+  return [...new Set([trimmed, ...formal, ...aliases, ...withIndia])].slice(0, 6);
 }
 
 export async function searchCompaniesByWeb(
@@ -254,6 +317,15 @@ export async function searchCompaniesByWeb(
     if (toflerResults.length > 0) {
       return { results: toflerResults.slice(0, limit), source: "Tofler" };
     }
+  }
+
+  // 1순위: 회사명 슬러그 직접 조회 (검색엔진 HTML이 막혀도 동작)
+  const slugResults = await lookupByNameSlug(trimmed);
+  if (slugResults.length > 0) {
+    return {
+      results: slugResults.slice(0, limit),
+      source: "CompanyDetails",
+    };
   }
 
   const queries = expandSearchQueries(trimmed);
